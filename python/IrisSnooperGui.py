@@ -179,12 +179,12 @@ class PlotterWidgets(QWidget):
         self._layout = QVBoxLayout(self)
         self._thread = None
 
-        self._args = handle
+        self._handle = handle
         self._chans = chans
         self._showTime = showTime
         self._sampleRate = 1e6
         self._centerFreq = 1e9
-        self._device = SoapySDR.Device(handle)
+        self._device = SoapySDR.Device(self._handle)
 
         fig = Figure(figsize=(width, height), dpi=dpi)
         ntime = len(chans) if showTime else 0
@@ -249,6 +249,13 @@ class PlotterWidgets(QWidget):
     def _snoopChannels(self):
         nextUpdate = time.time()
         while self._running:
+            if self._device is None:
+                print('Attempting to re-establish connection...')
+                try: self._device = SoapySDR.Device(self._handle)
+                except Exception as ex:
+                    print('Failed to connect %s, retrying in several seconds...'%str(ex))
+                    time.sleep(3)
+                    continue
             if nextUpdate < time.time():
                 self._sampleRate = self._device.getSampleRate(SOAPY_SDR_RX, 0)
                 self._centerFreq = self._device.getFrequency(SOAPY_SDR_RX, 0)
@@ -256,9 +263,14 @@ class PlotterWidgets(QWidget):
             sampleses = list()
             for ch in [0, 1]:
                 if "AB"[ch] not in self._chans: continue
-                samps = self._device.readRegisters('RX_SNOOPER', ch, 1024)
+                try: samps = self._device.readRegisters('RX_SNOOPER', ch, 1024)
+                except Exception as ex:
+                    print('readRegisters error %s, attempting to close connection...'%str(ex))
+                    self._device = None
+                    break
                 samps = np.array([complex(float(np.int16(s & 0xffff)), float(np.int16(s >> 16))) for s in samps])/float(1 << 15)
                 sampleses.append(samps)
+            if self._device is None: continue
             with self._mutex: self._dataInFlight += 1
             self.snooperComplete.emit(sampleses)
             time.sleep(0.1)
