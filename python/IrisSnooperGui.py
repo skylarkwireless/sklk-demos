@@ -1,0 +1,343 @@
+#!/usr/bin/python3
+#
+#	Passive monitor of Rx Channels with live wave plot and FFT viewer.
+#	This application has no controls by design, the iris must be setup
+#	by another script, demo, 3rd party application, etc.
+#
+#	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+#	INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+#	PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+#	FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+#	OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+#	DEALINGS IN THE SOFTWARE.
+#
+#	(c) info@skylarkwireless.com 2018
+
+########################################################################
+## Main window
+########################################################################
+from PyQt5.QtWidgets import QMainWindow
+from PyQt5.QtWidgets import QSplashScreen
+from PyQt5.QtCore import QSettings
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap
+
+class MainWindow(QMainWindow):
+    def __init__(self, parent = None, **kwargs):
+        QMainWindow.__init__(self, parent)
+        self._splash = QSplashScreen(self, QPixmap('logo.tif'))
+        self._splash.show()
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setWindowTitle("Iris Snooper GUI")
+        self.setMinimumSize(800, 600)
+        self._settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "IrisSnooperGUI", self)
+
+        #load previous settings
+        print("Loading %s"%self._settings.fileName())
+        if self._settings.contains("MainWindow/geometry"): self.restoreGeometry(self._settings.value("MainWindow/geometry"))
+        if self._settings.contains("MainWindow/state"): self.restoreState(self._settings.value("MainWindow/state"))
+
+        #start the window
+        self._plotters = PlotterWidgets(parent=self, **kwargs)
+        self.setCentralWidget(self._plotters)
+
+        #load complete
+        self._splash.finish(self)
+
+    def closeEvent(self, event):
+
+        #stash settings
+        self._settings.setValue("MainWindow/geometry", self.saveGeometry())
+        self._settings.setValue("MainWindow/state", self.saveState())
+
+        self._plotters.closeEvent(event)
+
+########################################################################
+## Device selection dialog
+########################################################################
+from PyQt5.QtWidgets import QDialog
+from PyQt5.QtWidgets import QListWidget
+from PyQt5.QtWidgets import QGroupBox
+from PyQt5.QtWidgets import QVBoxLayout
+from PyQt5.QtWidgets import QHBoxLayout
+from PyQt5.QtWidgets import QRadioButton
+from PyQt5.QtWidgets import QCheckBox
+from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import pyqtSignal
+import SoapySDR
+import threading
+
+DEVICE_POLL_TIME = 1.5 #seconds between poll
+
+class DeviceSelectionDialog(QDialog):
+
+    #signals
+    deviceSelected = pyqtSignal(dict)
+    deviceListQueried = pyqtSignal(list)
+
+    def __init__(self, parent = None):
+        QDialog.__init__(self, parent)
+        self.setWindowTitle('Select a device...')
+        self._layout = QVBoxLayout(self)
+
+        configLayout = QHBoxLayout()
+        self._layout.addLayout(configLayout)
+
+        self._list = QListWidget(self)
+        self._list.itemDoubleClicked.connect(self._handleListDoubleClicked)
+        self._layout.addWidget(self._list)
+
+        chanGroupBox = QGroupBox("Channel select", self)
+        configLayout.addWidget(chanGroupBox)
+        chanRadioLayout = QVBoxLayout(chanGroupBox)
+        self._chOptions = ("AB", "A", "B")
+        self._chanRadioButtons = [QRadioButton(chan, chanGroupBox) for chan in self._chOptions]
+        for r in self._chanRadioButtons: chanRadioLayout.addWidget(r)
+        self._chanRadioButtons[0].setChecked(True)
+
+        self._timeCheckBox = QCheckBox("Show time plots", self)
+        configLayout.addWidget(self._timeCheckBox)
+        self._timeCheckBox.setChecked(False)
+
+        self.deviceListQueried.connect(self._handleDeviceListQueried)
+        self._knownDevices = list()
+        self._deviceHandle = None
+
+        self._thread = None
+        self._updateTimer = QTimer(self)
+        self._updateTimer.setInterval(DEVICE_POLL_TIME*1000) #milliseconds
+        self._updateTimer.timeout.connect(self._handleUpdateTimeout)
+        self._handleUpdateTimeout() #initial update
+        self._updateTimer.start()
+
+    def deviceHandle(self): return self._deviceHandle
+
+    def showTime(self): return self._timeCheckBox.isChecked()
+
+    def channels(self):
+        for i, r in enumerate(self._chanRadioButtons):
+            if r.isChecked(): return self._chOptions[i]
+
+    def closeEvent(self, event):
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+
+    def _queryDeviceListThread(self):
+        self.deviceListQueried.emit([dict(elem) for elem in sorted(SoapySDR.Device.enumerate(dict(driver="iris")), key=lambda x: x['serial'])])
+
+    #private slots
+
+    def _handleDeviceListQueried(self, devices):
+        if devices == self._knownDevices: return
+        #reload the widget
+        self._list.clear()
+        self._knownDevices = devices
+        for device in self._knownDevices: self._list.addItem(device['label'])
+
+    def _handleListDoubleClicked(self, item):
+        row = self._list.row(item)
+        args = self._knownDevices[row]
+        #print(str(args))
+        self._deviceHandle = args
+        self.deviceSelected.emit(args)
+        self.accept()
+
+    def _handleUpdateTimeout(self):
+        if self._thread is not None and self._thread.isAlive(): return
+        self._thread = threading.Thread(target=self._queryDeviceListThread)
+        self._thread.start()
+
+########################################################################
+## Display widget
+########################################################################
+from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QSizePolicy
+from PyQt5.QtWidgets import QVBoxLayout
+from PyQt5.QtCore import pyqtSignal
+import threading
+import numpy as np
+import time
+import SoapySDR
+from SoapySDR import *
+
+import matplotlib
+try: matplotlib.use('Qt5Agg')
+except Exception as ex:
+    print("Failed to use qt5 backend -- maybe its not installed")
+    print("On ubuntu trusty, install python3-matplotlib from ppa:takluyver/matplotlib-daily")
+    raise ex
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+class PlotterWidgets(QWidget):
+
+    snooperComplete = pyqtSignal(list)
+
+    def __init__(self, handle, showTime, chans, parent = None, width=5, height=4, dpi=100):
+        QWidget.__init__(self, parent)
+        self._layout = QVBoxLayout(self)
+        self._thread = None
+
+        self._args = handle
+        self._chans = chans
+        self._showTime = showTime
+        self._sampleRate = 1e6
+        self._centerFreq = 1e9
+        self._device = SoapySDR.Device(handle)
+
+        fig = Figure(figsize=(width, height), dpi=dpi)
+        ntime = len(chans) if showTime else 0
+        nrows = ntime+1
+        self._axFreq = fig.add_subplot(nrows, 1, 1)
+        self._axTime = [fig.add_subplot(nrows, 1, i+2) for i in range(ntime)]
+        self._figure = FigureCanvas(fig)
+        self._figure.setParent(self)
+        self._figure.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._figure.updateGeometry()
+        self._layout.addWidget(self._figure)
+
+        #start background thread
+        self._running = True
+        self.snooperComplete.connect(self._handleSnooperComplete)
+        self._thread = threading.Thread(target=self._snoopChannels)
+        self._mutex = threading.Lock()
+        self._dataInFlight = 0
+        self._thread.start()
+
+    def closeEvent(self, event):
+        if self._thread is not None:
+            self._running = False
+            self._thread.join()
+            self._thread = None
+
+    def _handleSnooperComplete(self, sampleses):
+
+        #only handle if this is the last samples enqueued
+        with self._mutex:
+            self._dataInFlight -= 1
+            if self._dataInFlight: return
+
+        self._axFreq.clear()
+        rxRate = self._sampleRate
+        for i, samps in enumerate(sampleses):
+            ps = LogPowerFFT(samps)
+            color = "bg"[i]
+            self._axFreq.plot(np.arange(-rxRate/2/1e6, rxRate/2/1e6, rxRate/len(ps)/1e6)[:len(ps)], ps, color)
+        self._axFreq.set_title('Center frequency %g MHz'%(self._centerFreq/1e6), fontsize=10)
+        self._axFreq.set_ylabel('Power (dBfs)', fontsize=10)
+        self._axFreq.set_ylim(top=0, bottom=-120)
+        self._axFreq.grid(True)
+
+        if self._showTime:
+            WAVE_SAMPS = 1024
+            timeScale = np.arange(0, WAVE_SAMPS/(rxRate*1e-3), 1/(rxRate*1e-3))
+            for ch, ax in enumerate(self._axTime):
+                if ax is None: continue
+                ax.clear()
+                samps = sampleses[ch]
+                ax.plot(timeScale, np.real(samps[:WAVE_SAMPS]))
+                ax.plot(timeScale, np.imag(samps[:WAVE_SAMPS]))
+                ax.set_ylabel('Amplitude Ch%s (units)'%self._chans[ch], fontsize=10)
+                ax.set_ylim(top=-1, bottom=1)
+                ax.grid(True)
+
+        if self._axTime: self._axTime[-1].set_xlabel('Time (ms)', fontsize=10)
+
+        self._figure.draw()
+
+    def _snoopChannels(self):
+        nextUpdate = time.time()
+        while self._running:
+            if nextUpdate < time.time():
+                self._sampleRate = self._device.getSampleRate(SOAPY_SDR_RX, 0)
+                self._centerFreq = self._device.getFrequency(SOAPY_SDR_RX, 0)
+                nextUpdate = time.time() + 1.5
+            sampleses = list()
+            for ch in [0, 1]:
+                if "AB"[ch] not in self._chans: continue
+                samps = self._device.readRegisters('RX_SNOOPER', ch, 1024)
+                samps = np.array([complex(float(np.int16(s & 0xffff)), float(np.int16(s >> 16))) for s in samps])/float(1 << 15)
+                sampleses.append(samps)
+            with self._mutex: self._dataInFlight += 1
+            self.snooperComplete.emit(sampleses)
+            time.sleep(0.1)
+
+########################################################################
+## Log power FFT for plotting
+########################################################################
+import numpy as np
+import math
+import scipy.signal
+
+def LogPowerFFT(samps, peak=1.0, reorder=True, window=None):
+    """
+    Calculate the log power FFT bins of the complex samples.
+    @param samps numpy array of complex samples
+    @param peak maximum value of a sample (floats are usually 1.0, shorts are 32767)
+    @param reorder True to reorder so the DC bin is in the center
+    @param window function or None for default flattop window
+    @return an array of real values FFT power bins
+    """
+    size = len(samps)
+    numBins = size
+
+    #scale by dividing out the peak, full scale is 0dB
+    scaledSamps = samps/peak
+
+    #calculate window
+    if not window: window = scipy.signal.hann
+    windowBins = window(size)
+    windowPower = math.sqrt(sum(windowBins**2)/size)
+
+    #apply window
+    windowedSamps = np.multiply(windowBins, scaledSamps)
+
+    #window and fft gain adjustment
+    gaindB = 20*math.log10(size) + 20*math.log10(windowPower)
+
+    #take fft
+    fftBins = np.abs(np.fft.fft(windowedSamps))
+    fftBins = np.maximum(fftBins, 1e-20) #clip
+    powerBins = 20*np.log10(fftBins) - gaindB
+
+    #bin reorder
+    if reorder:
+        idx = np.argsort(np.fft.fftfreq(len(powerBins)))
+        powerBins = powerBins[idx]
+
+    return powerBins
+
+########################################################################
+## Invoke the application
+########################################################################
+from PyQt5.QtWidgets import QApplication
+import argparse
+import sys
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--args", help="Device arguments (or none for selection dialog)")
+    parser.add_argument("--time", help="Display time domain plots", action='store_true')
+    parser.add_argument("--chans", help="Which channels A, B, or AB", default="AB")
+    args = parser.parse_args()
+    handle = args.args
+    showTime = args.time
+    chans = args.chans
+
+    #pick a device to open
+    if not handle:
+        dialog = DeviceSelectionDialog()
+        dialog.exec()
+        handle = dialog.deviceHandle()
+        showTime = dialog.showTime()
+        chans = dialog.channels()
+    if not handle:
+        print('No device selected!')
+        exit(-1)
+
+    w = MainWindow(handle=handle, showTime=showTime, chans=chans)
+    w.show()
+    sys.exit(app.exec_())
