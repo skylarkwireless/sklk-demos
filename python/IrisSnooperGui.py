@@ -25,7 +25,7 @@ from PyQt5.QtGui import QPixmap
 class MainWindow(QMainWindow):
     def __init__(self, parent = None, **kwargs):
         QMainWindow.__init__(self, parent)
-        self._splash = QSplashScreen(self, QPixmap('logo.tif'))
+        self._splash = QSplashScreen(self, QPixmap('data/logo.tif'))
         self._splash.show()
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowTitle("Iris Snooper GUI")

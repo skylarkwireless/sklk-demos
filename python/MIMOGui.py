@@ -385,7 +385,7 @@ class QT_GUI:
 		vb = win.addViewBox(col=0, colspan=num_cols, lockAspect=True, enableMouse=False, invertY=True) #, border='00ff00'
 		vb.setBackgroundColor('ffffff')
 		#vb.setStyle() #todo:make rounded corners This takes a QStyle
-		img = QtGui.QGraphicsPixmapItem(QtGui.QPixmap('logo.tif'))
+		img = QtGui.QGraphicsPixmapItem(QtGui.QPixmap('data/logo.tif'))
 		vb.addItem(img)
 		#vb.scaleBy(4)
 
