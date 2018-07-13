@@ -28,7 +28,7 @@ class MainWindow(QMainWindow):
         self._splash = QSplashScreen(self, QPixmap('data/logo.tif'))
         self._splash.show()
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setWindowTitle("Iris Snooper GUI")
+        self.setWindowTitle("Iris Snooper GUI - %s"%kwargs['handle']['label'])
         self.setMinimumSize(800, 600)
         self._settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "IrisSnooperGUI", self)
 
@@ -251,6 +251,8 @@ if __name__ == '__main__':
         handle = dialog.deviceHandle()
         showTime = dialog.showTime()
         chans = dialog.channels()
+    else:
+        handle = SoapySDR.Device.enumerate(handle)[0]
     if not handle:
         print('No device selected!')
         exit(-1)

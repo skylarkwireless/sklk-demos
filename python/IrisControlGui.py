@@ -29,7 +29,7 @@ class MainWindow(QMainWindow):
         self._splash = QSplashScreen(self, QPixmap('data/logo.tif'))
         self._splash.show()
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.setWindowTitle("Iris Control GUI - Caution use at your own risk!")
+        self.setWindowTitle("Iris Control GUI - %s - Caution use at your own risk!"%kwargs['handle']['label'])
         self.setMinimumSize(800, 600)
         self._settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "IrisControlGUI", self)
 
@@ -339,6 +339,8 @@ if __name__ == '__main__':
         dialog = DeviceSelectionDialog()
         dialog.exec()
         handle = dialog.deviceHandle()
+    else:
+        handle = SoapySDR.Device.enumerate(handle)[0]
     if not handle:
         print('No device selected!')
         exit(-1)
