@@ -53,102 +53,6 @@ class MainWindow(QMainWindow):
         self._plotters.closeEvent(event)
 
 ########################################################################
-## Device selection dialog
-########################################################################
-from PyQt5.QtWidgets import QDialog
-from PyQt5.QtWidgets import QListWidget
-from PyQt5.QtWidgets import QGroupBox
-from PyQt5.QtWidgets import QVBoxLayout
-from PyQt5.QtWidgets import QHBoxLayout
-from PyQt5.QtWidgets import QRadioButton
-from PyQt5.QtWidgets import QCheckBox
-from PyQt5.QtCore import QTimer
-from PyQt5.QtCore import pyqtSignal
-import SoapySDR
-import threading
-
-DEVICE_POLL_TIME = 1.5 #seconds between poll
-
-class DeviceSelectionDialog(QDialog):
-
-    #signals
-    deviceSelected = pyqtSignal(dict)
-    deviceListQueried = pyqtSignal(list)
-
-    def __init__(self, parent = None):
-        QDialog.__init__(self, parent)
-        self.setWindowTitle('Select a device...')
-        self._layout = QVBoxLayout(self)
-
-        configLayout = QHBoxLayout()
-        self._layout.addLayout(configLayout)
-
-        self._list = QListWidget(self)
-        self._list.itemDoubleClicked.connect(self._handleListDoubleClicked)
-        self._layout.addWidget(self._list)
-
-        chanGroupBox = QGroupBox("Channel select", self)
-        configLayout.addWidget(chanGroupBox)
-        chanRadioLayout = QVBoxLayout(chanGroupBox)
-        self._chOptions = ("AB", "A", "B")
-        self._chanRadioButtons = [QRadioButton(chan, chanGroupBox) for chan in self._chOptions]
-        for r in self._chanRadioButtons: chanRadioLayout.addWidget(r)
-        self._chanRadioButtons[0].setChecked(True)
-
-        self._timeCheckBox = QCheckBox("Show time plots", self)
-        configLayout.addWidget(self._timeCheckBox)
-        self._timeCheckBox.setChecked(False)
-
-        self.deviceListQueried.connect(self._handleDeviceListQueried)
-        self._knownDevices = list()
-        self._deviceHandle = None
-
-        self._thread = None
-        self._updateTimer = QTimer(self)
-        self._updateTimer.setInterval(DEVICE_POLL_TIME*1000) #milliseconds
-        self._updateTimer.timeout.connect(self._handleUpdateTimeout)
-        self._handleUpdateTimeout() #initial update
-        self._updateTimer.start()
-
-    def deviceHandle(self): return self._deviceHandle
-
-    def showTime(self): return self._timeCheckBox.isChecked()
-
-    def channels(self):
-        for i, r in enumerate(self._chanRadioButtons):
-            if r.isChecked(): return self._chOptions[i]
-
-    def closeEvent(self, event):
-        if self._thread is not None:
-            self._thread.join()
-            self._thread = None
-
-    def _queryDeviceListThread(self):
-        self.deviceListQueried.emit([dict(elem) for elem in sorted(SoapySDR.Device.enumerate(dict(driver="iris")), key=lambda x: x['serial'])])
-
-    #private slots
-
-    def _handleDeviceListQueried(self, devices):
-        if devices == self._knownDevices: return
-        #reload the widget
-        self._list.clear()
-        self._knownDevices = devices
-        for device in self._knownDevices: self._list.addItem(device['label'])
-
-    def _handleListDoubleClicked(self, item):
-        row = self._list.row(item)
-        args = self._knownDevices[row]
-        #print(str(args))
-        self._deviceHandle = args
-        self.deviceSelected.emit(args)
-        self.accept()
-
-    def _handleUpdateTimeout(self):
-        if self._thread is not None and self._thread.isAlive(): return
-        self._thread = threading.Thread(target=self._queryDeviceListThread)
-        self._thread.start()
-
-########################################################################
 ## Display widget
 ########################################################################
 from PyQt5.QtWidgets import QWidget
@@ -224,7 +128,7 @@ class PlotterWidgets(QWidget):
             ps = LogPowerFFT(samps)
             color = "bg"[i]
             self._axFreq.plot(np.arange(-rxRate/2/1e6, rxRate/2/1e6, rxRate/len(ps)/1e6)[:len(ps)], ps, color)
-        self._axFreq.set_title('Center frequency %g MHz'%(self._centerFreq/1e6), fontsize=10)
+        self._axFreq.set_title('Center frequency %g MHz, Sample rate %g Msps'%(self._centerFreq/1e6, rxRate/1e6), fontsize=10)
         self._axFreq.set_ylabel('Power (dBfs)', fontsize=10)
         self._axFreq.set_ylim(top=0, bottom=-120)
         self._axFreq.grid(True)
@@ -324,6 +228,7 @@ def LogPowerFFT(samps, peak=1.0, reorder=True, window=None):
 ## Invoke the application
 ########################################################################
 from PyQt5.QtWidgets import QApplication
+from sklk_widgets import DeviceSelectionDialog
 import argparse
 import sys
 
@@ -341,7 +246,7 @@ if __name__ == '__main__':
 
     #pick a device to open
     if not handle:
-        dialog = DeviceSelectionDialog()
+        dialog = DeviceSelectionDialog(channelSelect=True, timeSelect=True)
         dialog.exec()
         handle = dialog.deviceHandle()
         showTime = dialog.showTime()

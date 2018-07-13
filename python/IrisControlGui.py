@@ -36,6 +36,7 @@ class MainWindow(QMainWindow):
         #start the window
         self._controlTabs = QTabWidget(self)
         self.setCentralWidget(self._controlTabs)
+        self._controlTabs.addTab(HighLevelControlTab(iris, [0, 1], self._controlTabs), "Main")
         for name, chans, start, stop in [
             ('LML', [0,], 0x0000, 0x002F),
             ('TxTSP', [0, 1], 0x0200, 0x020C),
@@ -147,6 +148,7 @@ from PyQt5.QtWidgets import QWidget
 from PyQt5.QtWidgets import QGroupBox
 from PyQt5.QtWidgets import QFormLayout
 from PyQt5.QtWidgets import QHBoxLayout
+import functools
 
 class LowLevelControlTab(QWidget):
     def __init__(self, iris, chans, start, stop, parent = None):
@@ -179,8 +181,7 @@ class LowLevelControlTab(QWidget):
                         hbox.addLayout(formLayout)
                     formLayout.addRow(name, edit)
                     self._editWidgets[(key, ch)] = edit
-                    def makeUpdateCallback(*args): return lambda val: LowLevelControlTab.rmwSetting(val, *args)
-                    edit.valueChanged.connect(makeUpdateCallback(iris, ch, addr, bit_start, bit_stop))
+                    edit.valueChanged.connect(functools.partial(LowLevelControlTab.rmwSetting, iris, ch, addr, bit_start, bit_stop))
 
     @staticmethod
     def setChannel(iris, ch):
@@ -189,7 +190,7 @@ class LowLevelControlTab(QWidget):
         if rdVal != wrVal: iris.writeRegister('LMS7IC', 0x0020, wrVal)
 
     @staticmethod
-    def rmwSetting(val, iris, ch, addr, bit_start, bit_stop):
+    def rmwSetting(iris, ch, addr, bit_start, bit_stop, val):
         LowLevelControlTab.setChannel(iris, ch)
         nbits = 1+bit_stop-bit_start
         mask = (1 << nbits)-1
@@ -212,9 +213,103 @@ class LowLevelControlTab(QWidget):
                 edit.setValue(val)
 
 ########################################################################
+## Main controls and high level controls
+########################################################################
+from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QGroupBox
+from PyQt5.QtWidgets import QFormLayout
+from PyQt5.QtWidgets import QGridLayout
+from PyQt5.QtWidgets import QDoubleSpinBox
+from PyQt5.QtWidgets import QComboBox
+from PyQt5.QtWidgets import QCheckBox
+from SoapySDR import *
+from sklk_widgets import FreqEntryWidget
+from sklk_widgets import ArbitrarySettingsWidget
+from sklk_widgets import StringValueComboBox
+import functools
+
+class HighLevelControlTab(QWidget):
+    def __init__(self, iris, chans, parent = None):
+        QWidget.__init__(self, parent)
+        layout = QGridLayout(self)
+        self._editWidgets = list()
+        self._iris = iris
+
+        #global configuration parameters
+        groupBox = QGroupBox("Global", self)
+        layout.addWidget(groupBox, 0, 0, 2, 1)
+        formLayout = QFormLayout(groupBox)
+        for name, widgetType, setter, getter in (
+            ("Rx Frequency", FreqEntryWidget, lambda f: [iris.setFrequency(SOAPY_SDR_RX, ch, "RF", f) for ch in [0, 1]], functools.partial(iris.getFrequency, SOAPY_SDR_RX, 0, "RF")),
+            ("Tx Frequency", FreqEntryWidget, lambda f: [iris.setFrequency(SOAPY_SDR_TX, ch, "RF", f) for ch in [0, 1]], functools.partial(iris.getFrequency, SOAPY_SDR_TX, 0, "RF")),
+            ("Sample Rate", FreqEntryWidget, lambda r: [iris.setSampleRate(d, 0, r) for d in (SOAPY_SDR_RX, SOAPY_SDR_TX)], functools.partial(iris.getSampleRate, SOAPY_SDR_RX, 0)),
+        ):
+            edit = FreqEntryWidget(groupBox)
+            formLayout.addRow(name, edit)
+            self.loadEditWidget(edit, setter, getter)
+        self.loadArbitrarySettings(groupBox, formLayout)
+
+        #per channel configuration parameters
+        for ch in chans:
+            for direction in (SOAPY_SDR_RX, SOAPY_SDR_TX):
+                groupBox = QGroupBox(("Rx" if direction == SOAPY_SDR_RX else "Tx") + " Ch"+"AB"[ch], self)
+                layout.addWidget(groupBox, 0 if direction == SOAPY_SDR_RX else 1, ch+1, 1, 1)
+                self.loadChannelSettings(groupBox, direction, ch)
+
+    def loadChannelSettings(self, parent, direction, ch):
+        formLayout = QFormLayout(parent)
+        factories = [
+            ("NCO Frequency", FreqEntryWidget, functools.partial(self._iris.setFrequency, direction, ch, "BB"), functools.partial(self._iris.getFrequency, direction, ch, "BB")),
+            ("Filter BW", FreqEntryWidget, functools.partial(self._iris.setBandwidth, direction, ch), functools.partial(self._iris.getBandwidth, direction, ch)),
+        ]
+        for name, widgetType, setter, getter in factories:
+            edit = FreqEntryWidget(parent)
+            formLayout.addRow(name, edit)
+            self.loadEditWidget(edit, setter, getter)
+        for name in self._iris.listGains(direction, ch):
+            edit = QDoubleSpinBox(parent)
+            formLayout.addRow(name, edit)
+            self.loadEditWidget(edit,
+                functools.partial(self._iris.setGain, direction, ch, name),
+                functools.partial(self._iris.getGain, direction, ch, name))
+            r = self._iris.getGainRange(direction, ch, name)
+            edit.setRange(r.minimum(), r.maximum())
+            if r.step() != 0: edit.setSingleStep(r.step())
+            edit.setSuffix(' dB')
+        edit = StringValueComboBox(options=self._iris.listAntennas(direction, ch), parent=parent)
+        formLayout.addRow("Antenna", edit)
+        self.loadEditWidget(edit,
+            functools.partial(self._iris.setAntenna, direction, ch),
+            functools.partial(self._iris.getAntenna, direction, ch))
+        self.loadArbitrarySettings(parent, formLayout, [direction, ch])
+
+    def loadArbitrarySettings(self, parent, formLayout, prefixArgs=[]):
+        for info in self._iris.getSettingInfo(*prefixArgs):
+            if 'FIR' in info.key: continue #skip FIR stuff
+            if 'DELAY' in info.key: continue #skip tx delay
+            if info.key in ('TRIGGER_GEN', 'SYNC_DELAYS', 'CALIBRATE', 'FPGA_TSG_CONST'): continue
+            edit = ArbitrarySettingsWidget(info, parent)
+            formLayout.addRow(info.name, edit)
+            self.loadEditWidget(edit,
+                functools.partial(self._iris.writeSetting, *(prefixArgs+[info.key])),
+                functools.partial(self._iris.readSetting, *(prefixArgs+[info.key])))
+
+    def loadEditWidget(self, edit, setter, getter):
+        edit.valueChanged.connect(setter)
+        self._editWidgets.append((edit, getter))
+
+    def showEvent(self, e):
+       for edit, getter in self._editWidgets:
+           value = None
+           try: value = getter()
+           except Exception as ex: print(ex)
+           if value is not None: edit.setValue(value)
+
+########################################################################
 ## Invoke the application
 ########################################################################
 from PyQt5.QtWidgets import QApplication
+from sklk_widgets import DeviceSelectionDialog
 import SoapySDR
 import argparse
 import sys
@@ -226,6 +321,14 @@ if __name__ == '__main__':
     parser.add_argument("--args", help="Device arguments (or none for selection dialog)")
     args = parser.parse_args()
     handle = args.args
+
+    if not handle:
+        dialog = DeviceSelectionDialog()
+        dialog.exec()
+        handle = dialog.deviceHandle()
+    if not handle:
+        print('No device selected!')
+        exit(-1)
 
     iris = SoapySDR.Device(handle)
 
