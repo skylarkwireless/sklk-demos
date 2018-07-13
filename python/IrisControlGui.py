@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
             ('TBB', [0, 1], 0x0105, 0x010B),
             ('EN_DIR', [0,], 0x0081, 0x0081),
             ('LDO', [0,], 0x0092, 0x00A7),
+            ('DC', [0,], 0x05C0, 0x05CC),
         ]:
             scroll = QScrollArea(self._controlTabs)
             tab = LowLevelControlTab(iris, chans, start, stop, scroll)
@@ -222,6 +223,8 @@ from PyQt5.QtWidgets import QGridLayout
 from PyQt5.QtWidgets import QDoubleSpinBox
 from PyQt5.QtWidgets import QComboBox
 from PyQt5.QtWidgets import QCheckBox
+from PyQt5.QtWidgets import QPushButton
+from PyQt5.QtWidgets import QHBoxLayout
 from SoapySDR import *
 from sklk_widgets import FreqEntryWidget
 from sklk_widgets import ArbitrarySettingsWidget
@@ -257,7 +260,9 @@ class HighLevelControlTab(QWidget):
                 self.loadChannelSettings(groupBox, direction, ch)
 
     def loadChannelSettings(self, parent, direction, ch):
-        formLayout = QFormLayout(parent)
+        hbox = QHBoxLayout(parent)
+        formLayout = QFormLayout()
+        hbox.addLayout(formLayout)
         factories = [
             ("NCO Frequency", FreqEntryWidget, functools.partial(self._iris.setFrequency, direction, ch, "BB"), functools.partial(self._iris.getFrequency, direction, ch, "BB")),
             ("Filter BW", FreqEntryWidget, functools.partial(self._iris.setBandwidth, direction, ch), functools.partial(self._iris.getBandwidth, direction, ch)),
@@ -276,12 +281,20 @@ class HighLevelControlTab(QWidget):
             edit.setRange(r.minimum(), r.maximum())
             if r.step() != 0: edit.setSingleStep(r.step())
             edit.setSuffix(' dB')
+        formLayout = QFormLayout()
+        hbox.addLayout(formLayout)
         edit = StringValueComboBox(options=self._iris.listAntennas(direction, ch), parent=parent)
         formLayout.addRow("Antenna", edit)
         self.loadEditWidget(edit,
             functools.partial(self._iris.setAntenna, direction, ch),
             functools.partial(self._iris.getAntenna, direction, ch))
         self.loadArbitrarySettings(parent, formLayout, [direction, ch])
+        sklkCalButton = QPushButton("SKLK Calibrate", parent)
+        sklkCalButton.pressed.connect(functools.partial(self._iris.writeSetting, direction, ch, "CALIBRATE", "SKLK"))
+        formLayout.addRow("Self Calibrate", sklkCalButton)
+        mcuCalButton = QPushButton("MCU Calibrate", parent)
+        mcuCalButton.pressed.connect(functools.partial(self._iris.writeSetting, direction, ch, "CALIBRATE", ""))
+        formLayout.addRow("Self Calibrate", mcuCalButton)
 
     def loadArbitrarySettings(self, parent, formLayout, prefixArgs=[]):
         for info in self._iris.getSettingInfo(*prefixArgs):
