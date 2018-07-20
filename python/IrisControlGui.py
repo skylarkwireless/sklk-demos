@@ -77,11 +77,13 @@ class MainWindow(QMainWindow):
 import re
 paramsH = open('data/LMS7002M_parameters.h').read()
 PARAMS = list()
+ADDRS = set()
 for match in re.findall('static const struct LMS7Parameter ((LMS7_\w+)\s*=\s*{\s*(0x*.+?)}\s*;)', paramsH, re.MULTILINE | re.DOTALL):
     key, fields = match[1:]
     fields = fields.replace('\n', '')
     addr, stop, start, default, name, desc = eval(fields)
     PARAMS.append([key, addr, start, stop, default, name, desc])
+    ADDRS.add(addr)
 
 ########################################################################
 ## Low level register edit widget
@@ -225,11 +227,13 @@ from PyQt5.QtWidgets import QComboBox
 from PyQt5.QtWidgets import QCheckBox
 from PyQt5.QtWidgets import QPushButton
 from PyQt5.QtWidgets import QHBoxLayout
+from PyQt5.QtWidgets import QFileDialog
 from SoapySDR import *
 from sklk_widgets import FreqEntryWidget
 from sklk_widgets import ArbitrarySettingsWidget
 from sklk_widgets import StringValueComboBox
 import functools
+import json
 
 class HighLevelControlTab(QWidget):
     def __init__(self, iris, chans, parent = None):
@@ -249,8 +253,15 @@ class HighLevelControlTab(QWidget):
         ):
             edit = FreqEntryWidget(groupBox)
             formLayout.addRow(name, edit)
-            self.loadEditWidget(edit, setter, getter)
+            self.loadEditWidget(edit, setter, getter, [name])
         self.loadArbitrarySettings(groupBox, formLayout)
+
+        loadConfigButton = QPushButton("Load Config", groupBox)
+        formLayout.addRow(loadConfigButton)
+        loadConfigButton.pressed.connect(self._handleLoadDialog)
+        saveConfigButton = QPushButton("Save Config", groupBox)
+        formLayout.addRow(saveConfigButton)
+        saveConfigButton.pressed.connect(self._handleSaveDialog)
 
         #per channel configuration parameters
         for ch in chans:
@@ -270,13 +281,14 @@ class HighLevelControlTab(QWidget):
         for name, widgetType, setter, getter in factories:
             edit = FreqEntryWidget(parent)
             formLayout.addRow(name, edit)
-            self.loadEditWidget(edit, setter, getter)
+            self.loadEditWidget(edit, setter, getter, [direction, ch, name])
         for name in self._iris.listGains(direction, ch):
             edit = QDoubleSpinBox(parent)
             formLayout.addRow(name, edit)
             self.loadEditWidget(edit,
                 functools.partial(self._iris.setGain, direction, ch, name),
-                functools.partial(self._iris.getGain, direction, ch, name))
+                functools.partial(self._iris.getGain, direction, ch, name),
+                [direction, ch, name])
             r = self._iris.getGainRange(direction, ch, name)
             edit.setRange(r.minimum(), r.maximum())
             if r.step() != 0: edit.setSingleStep(r.step())
@@ -287,7 +299,8 @@ class HighLevelControlTab(QWidget):
         formLayout.addRow("Antenna", edit)
         self.loadEditWidget(edit,
             functools.partial(self._iris.setAntenna, direction, ch),
-            functools.partial(self._iris.getAntenna, direction, ch))
+            functools.partial(self._iris.getAntenna, direction, ch),
+            [direction, ch, 'Antenna'])
         self.loadArbitrarySettings(parent, formLayout, [direction, ch])
         sklkCalButton = QPushButton("SKLK Calibrate", parent)
         sklkCalButton.pressed.connect(functools.partial(self._iris.writeSetting, direction, ch, "CALIBRATE", "SKLK"))
@@ -305,18 +318,52 @@ class HighLevelControlTab(QWidget):
             formLayout.addRow(info.name, edit)
             self.loadEditWidget(edit,
                 functools.partial(self._iris.writeSetting, *(prefixArgs+[info.key])),
-                functools.partial(self._iris.readSetting, *(prefixArgs+[info.key])))
+                functools.partial(self._iris.readSetting, *(prefixArgs+[info.key])),
+                prefixArgs + [info.name])
 
-    def loadEditWidget(self, edit, setter, getter):
+    def loadEditWidget(self, edit, setter, getter, args):
         edit.valueChanged.connect(setter)
-        self._editWidgets.append((edit, getter))
+        self._editWidgets.append((edit, setter, getter, args))
 
     def showEvent(self, e):
-       for edit, getter in self._editWidgets:
+       for edit, setter, getter, args in self._editWidgets:
            value = None
            try: value = getter()
            except Exception as ex: print(ex)
            if value is not None: edit.setValue(value)
+
+    def _handleSaveDialog(self):
+        fname = QFileDialog.getSaveFileName(self, "Save config to file", ".", "Config (*.json)")
+        if not fname: return
+        config = {'global':{}, 'tx':[{}, {}], 'rx':[{}, {}], 'regs':[{}, {}]}
+        for edit, setter, getter, args in self._editWidgets:
+            if len(args) == 1: config['global'][args[0]] = getter()
+            else: config['tx' if args[0] == SOAPY_SDR_TX else 'rx'][args[1]][args[2]] = getter()
+        r20 = self._iris.readRegister('LMS7IC', 0x0020) & ~0x3
+        for ch in [0, 1]:
+            self._iris.writeRegister('LMS7IC', 0x0020, r20 | (ch+1))
+            for addr in ADDRS:
+                if ch == 1 and addr < 0x0100: continue
+                value = iris.readRegister('LMS7IC', addr)
+                config['regs'][ch][hex(addr)] = hex(value)
+        open(fname[0], 'w').write(json.dumps(config, indent=4))
+        print('wrote %s'%fname[0])
+
+    def _handleLoadDialog(self):
+        fname = QFileDialog.getOpenFileName(self, "Open saved config file", ".", "Config (*.json)")
+        if not fname: return
+        config = json.loads(open(fname[0]).read())
+        r20 = self._iris.readRegister('LMS7IC', 0x0020) & ~0x3
+        for ch in [0, 1]:
+            self._iris.writeRegister('LMS7IC', 0x0020, r20 | (ch+1))
+            for addr, value in config['regs'][ch].items():
+                iris.writeRegister('LMS7IC', int(addr, 16), int(value, 16))
+        for edit, setter, getter, args in self._editWidgets:
+            try:
+                if len(args) == 1: setter(config['global'][args[0]])
+                else: setter(config['tx' if args[0] == SOAPY_SDR_TX else 'rx'][args[1]][args[2]])
+            except KeyError: pass
+        self.showEvent(None) #reload
 
 ########################################################################
 ## Invoke the application
