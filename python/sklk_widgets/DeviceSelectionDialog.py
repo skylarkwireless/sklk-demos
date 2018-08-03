@@ -10,7 +10,6 @@ from PyQt5.QtWidgets import QRadioButton
 from PyQt5.QtWidgets import QPushButton
 from PyQt5.QtWidgets import QCheckBox
 from PyQt5.QtCore import QTimer
-from PyQt5.QtCore import QSettings
 from PyQt5.QtCore import pyqtSignal
 import SoapySDR
 import threading
@@ -23,7 +22,7 @@ class DeviceSelectionDialog(QDialog):
     deviceSelected = pyqtSignal(dict)
     deviceListQueried = pyqtSignal(list)
 
-    def __init__(self, channelSelect=False, timeSelect=False, parent = None):
+    def __init__(self, channelSelect=False, timeSelect=False, settings=None, parent = None):
         QDialog.__init__(self, parent)
         self.setWindowTitle('Select a device...')
         self._layout = QVBoxLayout(self)
@@ -67,12 +66,14 @@ class DeviceSelectionDialog(QDialog):
         self._handleUpdateTimeout() #initial update
         self._updateTimer.start()
 
-        self._settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "DeviceSelectionDialog", self)
-        print("Loading %s"%self._settings.fileName())
-        if timeSelect: self._timeCheckBox.setChecked(self._settings.value("Dialog/timeSelect", False, type=bool))
-        if channelSelect:
-            sel = self._settings.value("Dialog/channelSelect", "AB")
-            for i, opt in enumerate(self._chOptions): self._chanRadioButtons[i].setChecked(opt == sel)
+        self._settings = settings
+        if self._settings:
+            if timeSelect: self._timeCheckBox.setChecked(self._settings.value("DeviceSelectionDialog/timeSelect", False, type=bool))
+            if channelSelect:
+                sel = self._settings.value("DeviceSelectionDialog/channelSelect", "AB")
+                for i, opt in enumerate(self._chOptions): self._chanRadioButtons[i].setChecked(opt == sel)
+
+        self.finished.connect(self._handleFinished)
 
     def deviceHandle(self): return self._deviceHandle
 
@@ -82,10 +83,11 @@ class DeviceSelectionDialog(QDialog):
         for i, r in enumerate(self._chanRadioButtons):
             if r.isChecked(): return self._chOptions[i]
 
-    def closeEvent(self, event):
-        if self._timeSelect: self._settings.setValue("Dialog/timeSelect", self._timeCheckBox.isChecked())
-        if self._channelSelect: self._settings.setValue("Dialog/channelSelect", self.channels())
-        self._settings.sync()
+    def _handleFinished(self, num):
+        if self._settings:
+            if self._timeSelect: self._settings.setValue("DeviceSelectionDialog/timeSelect", self._timeCheckBox.isChecked())
+            if self._channelSelect: self._settings.setValue("DeviceSelectionDialog/channelSelect", self.channels())
+            self._settings.sync()
         if self._thread is not None:
             self._thread.join()
             self._thread = None

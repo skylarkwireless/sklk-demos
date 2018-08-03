@@ -19,19 +19,18 @@ from PyQt5.QtWidgets import QMainWindow
 from PyQt5.QtWidgets import QTabWidget
 from PyQt5.QtWidgets import QSplashScreen
 from PyQt5.QtWidgets import QScrollArea
-from PyQt5.QtCore import QSettings
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 
 class MainWindow(QMainWindow):
-    def __init__(self, iris, parent = None, **kwargs):
+    def __init__(self, iris, settings, parent = None, **kwargs):
         QMainWindow.__init__(self, parent)
         self._splash = QSplashScreen(self, QPixmap('data/logo.tif'))
         self._splash.show()
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowTitle("Iris Control GUI - %s - Caution use at your own risk!"%kwargs['handle']['label'])
         self.setMinimumSize(800, 600)
-        self._settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "IrisControlGUI", self)
+        self._settings = settings
 
         #start the window
         self._controlTabs = QTabWidget(self)
@@ -369,6 +368,7 @@ class HighLevelControlTab(QWidget):
 ## Invoke the application
 ########################################################################
 from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QSettings
 from sklk_widgets import DeviceSelectionDialog
 import SoapySDR
 import argparse
@@ -382,8 +382,10 @@ if __name__ == '__main__':
     args = parser.parse_args()
     handle = args.args
 
+    settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "IrisControlGUI")
+
     if not handle:
-        dialog = DeviceSelectionDialog()
+        dialog = DeviceSelectionDialog(settings=settings)
         dialog.exec()
         handle = dialog.deviceHandle()
     else:
@@ -394,6 +396,6 @@ if __name__ == '__main__':
 
     iris = SoapySDR.Device(handle)
 
-    w = MainWindow(iris=iris, handle=handle)
+    w = MainWindow(iris=iris, settings=settings, handle=handle)
     w.show()
     sys.exit(app.exec_())

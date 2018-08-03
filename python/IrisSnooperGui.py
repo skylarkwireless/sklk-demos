@@ -18,19 +18,18 @@
 ########################################################################
 from PyQt5.QtWidgets import QMainWindow
 from PyQt5.QtWidgets import QSplashScreen
-from PyQt5.QtCore import QSettings
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 
 class MainWindow(QMainWindow):
-    def __init__(self, parent = None, **kwargs):
+    def __init__(self, settings, parent = None, **kwargs):
         QMainWindow.__init__(self, parent)
         self._splash = QSplashScreen(self, QPixmap('data/logo.tif'))
         self._splash.show()
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowTitle("Iris Snooper GUI - %s"%kwargs['handle']['label'])
         self.setMinimumSize(800, 600)
-        self._settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "IrisSnooperGUI", self)
+        self._settings = settings
 
         #load previous settings
         print("Loading %s"%self._settings.fileName())
@@ -228,6 +227,7 @@ def LogPowerFFT(samps, peak=1.0, reorder=True, window=None):
 ## Invoke the application
 ########################################################################
 from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QSettings
 from sklk_widgets import DeviceSelectionDialog
 import argparse
 import sys
@@ -244,9 +244,12 @@ if __name__ == '__main__':
     showTime = args.time
     chans = args.chans
 
+    #load previous settings
+    settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "IrisSnooperGUI")
+
     #pick a device to open
     if not handle:
-        dialog = DeviceSelectionDialog(channelSelect=True, timeSelect=True)
+        dialog = DeviceSelectionDialog(channelSelect=True, timeSelect=True, settings=settings)
         dialog.exec()
         handle = dialog.deviceHandle()
         showTime = dialog.showTime()
@@ -257,6 +260,6 @@ if __name__ == '__main__':
         print('No device selected!')
         exit(-1)
 
-    w = MainWindow(handle=handle, showTime=showTime, chans=chans)
+    w = MainWindow(handle=handle, showTime=showTime, chans=chans, settings=settings)
     w.show()
     sys.exit(app.exec_())
