@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(800, 600)
         self._settings = settings
 
-        self.addDockWidget(Qt.TopDockWidgetArea, TopLevelControlPanel(irises=irises, parent=self))
+        self.addDockWidget(Qt.TopDockWidgetArea, TopLevelControlPanel(irises=irises, settings=settings, parent=self))
 
         #start the window
         self.setCentralWidget(MainStatusWindow(irises=irises, parent=self))
@@ -123,16 +123,7 @@ class SingleIrisStatus(QWidget):
             else:
                 self._errorMessages[ch].setText('    ')
         self._txt.setText('%g C'%results['temp'])
-        print('_handleParserComplete %s'%str(results))
-        """
-        self._progressBar.setStyleSheet("::chunk {"
-                   "background-color: "
-                   "qlineargradient(x0: 0, x2: 1, "
-                   "stop: 0 green, stop: 0.6 green, "
-                   "stop: 0.60001 orange, stop: 0.8 orange, "
-                   "stop: 0.80001 red, stop: 1 red"
-                   ")}")
-        """
+        #print('_handleParserComplete %s'%str(results))
         self._timer.start()
 
     def _handleTimeout(self):
@@ -212,9 +203,6 @@ def setupIris(iris):
         iris.writeSetting(SOAPY_SDR_TX, ch, 'TSP_TSG_CONST', str(1 << 12))
         iris.setFrequency(SOAPY_SDR_TX, ch, 'BB', TONE_FS)
     iris.writeSetting('FE_ENABLE_CAL_PATH', 'true')
-    #for ch in [0, 1]:
-    #    iris.setFrequency(SOAPY_SDR_RX, ch, "RF", 3.6e9)
-    #    iris.setFrequency(SOAPY_SDR_TX, ch, "RF", 3.6e9)
 
 ########################################################################
 ## Top level control panel
@@ -231,10 +219,11 @@ import functools
 import threading
 
 class TopLevelControlPanel(QDockWidget):
-    def __init__(self, irises, parent = None):
+    def __init__(self, irises, settings, parent = None):
         QDockWidget.__init__(self, "Control panel", parent)
         self.setObjectName("TopLevelControlPanel")
         self._irises = irises
+        self._settings = settings
 
         widget = QWidget(self)
         self.setWidget(widget)
@@ -242,8 +231,10 @@ class TopLevelControlPanel(QDockWidget):
         form = QFormLayout()
         layout.addLayout(form)
 
+        freq = self._settings.value('TopLevelControlPanel/tddFrequency', 3.6e9, float)
+        self._handleTddFreqChange(freq)
         tddFrequencyEntry = FreqEntryWidget(widget)
-        tddFrequencyEntry.setValue(irises[0].getFrequency(SOAPY_SDR_TX, 0, "RF"))
+        tddFrequencyEntry.setValue(freq)
         tddFrequencyEntry.valueChanged.connect(self._handleTddFreqChange)
         form.addRow("TDD Frequency", tddFrequencyEntry)
 
@@ -255,13 +246,15 @@ class TopLevelControlPanel(QDockWidget):
                 if i%2 == 0:
                     form = QFormLayout()
                     hbox.addLayout(form)
+                value = self._settings.value('TopLevelControlPanel/%sGain%s'%('Rx' if direction == SOAPY_SDR_RX else 'Tx', gainName), 0.0, float)
+                self._handleGainChange(direction, gainName, value)
                 edit = QDoubleSpinBox(widget)
                 form.addRow(gainName, edit)
                 r = irises[0].getGainRange(direction, 0, gainName)
                 edit.setRange(r.minimum(), r.maximum())
                 if r.step() != 0: edit.setSingleStep(r.step())
                 edit.setSuffix(' dB')
-                edit.setValue(irises[0].getGain(direction, 0, gainName))
+                edit.setValue(value)
                 edit.valueChanged.connect(functools.partial(self._handleGainChange, direction, gainName))
 
     def _handleTddFreqChange(self, newFreq):
@@ -269,12 +262,14 @@ class TopLevelControlPanel(QDockWidget):
             threads = [threading.Thread(target=functools.partial(iris.setFrequency, direction, 0, "RF", newFreq)) for iris in self._irises]
             for t in threads: t.start()
             for t in threads: t.join()
+        self._settings.setValue('TopLevelControlPanel/tddFrequency', newFreq)
 
     def _handleGainChange(self, direction, gainName, newValue):
         for ch in [0, 1]:
             threads = [threading.Thread(target=functools.partial(iris.setGain, direction, ch, gainName, newValue)) for iris in self._irises]
             for t in threads: t.start()
             for t in threads: t.join()
+        self._settings.setValue('TopLevelControlPanel/%sGain%s'%('Rx' if direction == SOAPY_SDR_RX else 'Tx', gainName), newValue)
 
 ########################################################################
 ## Invoke the application
