@@ -288,7 +288,12 @@ if __name__ == '__main__':
     #parser = argparse.ArgumentParser()
     #args = parser.parse_args()
 
-    irises = SoapySDR.Device([dict(driver='iris',serial=s) for s in sys.argv[1:]])
+    serials = sys.argv[1:]
+    if serials: handles = [dict(driver='iris',serial=s) for s in serials]
+    else:
+        handles = [h for h in SoapySDR.Device.enumerate(dict(driver='iris')) if 'CBRS' in h['frontend']]
+
+    irises = SoapySDR.Device(handles)
     threads = [threading.Thread(target=setupIris, args=[iris]) for iris in irises]
     for t in threads: t.start()
     for t in threads: t.join()
