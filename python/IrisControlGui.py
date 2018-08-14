@@ -48,6 +48,9 @@ class MainWindow(QMainWindow):
             ('EN_DIR', [0,], 0x0081, 0x0081),
             ('LDO', [0,], 0x0092, 0x00A7),
             ('DC', [0,], 0x05C0, 0x05CC),
+            ('AFE', [0,], 0x0082, 0x0082),
+            ('BIAS', [0,], 0x0083, 0x0084),
+            ('XBUF', [0,], 0x0085, 0x0085),
         ]:
             scroll = QScrollArea(self._controlTabs)
             tab = LowLevelControlTab(iris, chans, start, stop, scroll)
