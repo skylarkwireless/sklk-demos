@@ -23,7 +23,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 
 class MainWindow(QMainWindow):
-    def __init__(self, irises, settings, parent = None, **kwargs):
+    def __init__(self, irises, settings, parent=None, chan=None, **kwargs):
         QMainWindow.__init__(self, parent)
         self._splash = QSplashScreen(self, QPixmap('data/logo.tif'))
         self._splash.show()
@@ -35,7 +35,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.TopDockWidgetArea, TopLevelControlPanel(irises=irises, settings=settings, parent=self))
 
         #start the window
-        self.setCentralWidget(MainStatusWindow(irises=irises, parent=self))
+        self.setCentralWidget(MainStatusWindow(irises=irises, parent=self, chan=chan))
 
         #load previous settings
         print("Loading %s"%self._settings.fileName())
@@ -59,7 +59,7 @@ from PyQt5.QtWidgets import QFormLayout
 from PyQt5.QtWidgets import QHBoxLayout
 
 class MainStatusWindow(QWidget):
-    def __init__(self, irises, parent = None):
+    def __init__(self, irises, parent=None, chan=None):
         QWidget.__init__(self, parent)
         hbox = QHBoxLayout(self)
         for i, iris in enumerate(irises):
@@ -67,7 +67,7 @@ class MainStatusWindow(QWidget):
                 form = QFormLayout()
                 hbox.addLayout(form)
             serial = iris.getHardwareInfo()['serial']
-            statusDisplay = SingleIrisStatus(iris, self)
+            statusDisplay = SingleIrisStatus(iris, self, chan)
             form.addRow(serial, statusDisplay)
 
 ########################################################################
@@ -85,7 +85,8 @@ import numpy as np
 class SingleIrisStatus(QWidget):
     parserComplete = pyqtSignal(dict)
 
-    def __init__(self, iris, parent = None):
+    def __init__(self, iris, parent=None, chan=None):
+        self.chan = [0,1] if chan is None else [chan]
         QWidget.__init__(self, parent)
         self._iris = iris
         layout = QHBoxLayout(self)
@@ -93,11 +94,12 @@ class SingleIrisStatus(QWidget):
         layout.addLayout(vbox)
         self._progressBars = list()
         self._errorMessages = list()
-        for ch in [0, 1]:
+        for ch in [0,1]:
             pbar = QProgressBar(self)
             vbox.addWidget(pbar)
             pbar.setRange(-100, 0)
             pbar.setFormat("Ch%s %%v dBfs"%("AB"[ch]))
+            pbar.setValue(-100)
             self._progressBars.append(pbar)
             txt = QLabel(self)
             vbox.addWidget(txt)
@@ -116,7 +118,7 @@ class SingleIrisStatus(QWidget):
     def _handleParserComplete(self, results):
         self._thread.join()
         self._thread = None
-        for ch in [0, 1]:
+        for ch in self.chan:
             self._progressBars[ch].setValue(results[ch]['pwr'])
             if 'err' in results[ch]:
                 self._errorMessages[ch].setText('<font color="red">%s</font>'%(results[ch]['err']))
@@ -132,7 +134,7 @@ class SingleIrisStatus(QWidget):
 
     def _workThread(self):
         results = dict()
-        for ch in [0, 1]:
+        for ch in self.chan:
             samps = self._iris.readRegisters('RX_SNOOPER', ch, 1024)
             samps = np.array([complex(float(np.int16(s & 0xffff)), float(np.int16(s >> 16))) for s in samps])/float(1 << 15)
             result = toneGood(samps)
@@ -194,7 +196,7 @@ def toneGood(samps, tone=TONE_FS, fs=SAMP_RATE, low_thresh=0.01, high_thresh=0.7
     result['ret'] = True
     return result
 
-def setupIris(iris):
+def setupIris(iris, chan):
     for ch in [0, 1]:
         iris.setSampleRate(SOAPY_SDR_RX, ch, SAMP_RATE)
         iris.setSampleRate(SOAPY_SDR_TX, ch, SAMP_RATE)
@@ -203,6 +205,9 @@ def setupIris(iris):
         iris.writeSetting(SOAPY_SDR_TX, ch, 'TSP_TSG_CONST', str(1 << 12))
         iris.setFrequency(SOAPY_SDR_TX, ch, 'BB', TONE_FS)
     iris.writeSetting('FE_ENABLE_CAL_PATH', 'true')
+    if chan is not None:
+        iris.writeSetting(SOAPY_SDR_TX, int(not chan), "ENABLE_CHANNEL","false")
+        iris.writeSetting(SOAPY_SDR_RX, int(not chan), "ENABLE_CHANNEL","false")
 
 ########################################################################
 ## Top level control panel
@@ -287,19 +292,19 @@ if __name__ == '__main__':
 
     #parser = argparse.ArgumentParser()
     #args = parser.parse_args()
-
+    chan = None #set to 0 or 1 for only testing one channel (better performance in CBRS)
     serials = sys.argv[1:]
     if serials: handles = [dict(driver='iris',serial=s) for s in serials]
     else:
         handles = [h for h in SoapySDR.Device.enumerate(dict(driver='iris')) if 'CBRS' in h['frontend']]
 
     irises = SoapySDR.Device(handles)
-    threads = [threading.Thread(target=setupIris, args=[iris]) for iris in irises]
+    threads = [threading.Thread(target=setupIris, args=[iris,chan]) for iris in irises]
     for t in threads: t.start()
     for t in threads: t.join()
 
     settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "CBRSArrayMonitor")
 
-    w = MainWindow(irises=irises, settings=settings)
+    w = MainWindow(irises=irises, settings=settings, chan=chan)
     w.show()
     sys.exit(app.exec_())
