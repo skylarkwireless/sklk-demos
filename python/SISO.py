@@ -30,6 +30,22 @@ from SoapySDR import * #SOAPY_SDR_constants
 import numpy as np
 import time
 
+def cfloat2uint32(arr, order='IQ'):
+		arr_i = (np.real(arr) * 32767).astype(np.uint16)
+		arr_q = (np.imag(arr) * 32767).astype(np.uint16)
+		if order == 'IQ':
+			return np.bitwise_or(arr_q ,np.left_shift(arr_i.astype(np.uint32), 16))
+		else:
+			return np.bitwise_or(arr_i ,np.left_shift(arr_q.astype(np.uint32), 16))
+	
+def uint32tocfloat(arr, order='IQ'):
+	arr_hi = ((np.right_shift(arr, 16).astype(np.int16))/32768.0)
+	arr_lo = (np.bitwise_and(arr, 0xFFFF).astype(np.int16))/32768.0
+	if order == 'IQ':
+		return (arr_hi + 1j*arr_lo).astype(np.complex64)
+	else:
+		return (arr_lo + 1j*arr_hi).astype(np.complex64)
+
 class SISO_SDR:
 	'''
 		Class that initializes 1 TX and/or 1 RX Irises (based on the serials provided),		
@@ -60,10 +76,7 @@ class SISO_SDR:
 		self.rate = rate
 		
 		### Setup channel rates, ports, gains, and filters ###
-		crate = rate*4
-		while crate < 320e6: crate *=2 #max out master clock (helps for oversampling)
 		for sdr in self.sdrs:
-			sdr.setMasterClockRate(crate) #no longer necessary?
 			for chan in [0]:
 				if rate is not None: sdr.setSampleRate(SOAPY_SDR_RX, chan, rate)
 				if bw is not None: sdr.setBandwidth(SOAPY_SDR_RX, chan, bw)
@@ -77,13 +90,20 @@ class SISO_SDR:
 				if bw is not None: sdr.setBandwidth(SOAPY_SDR_TX, chan, bw)
 				if txGain is not None: sdr.setGain(SOAPY_SDR_TX, chan, txGain) 
 				if freq is not None: sdr.setFrequency(SOAPY_SDR_TX, chan, "RF", freq)
+				print("Set frequency to %f" % sdr.getFrequency(SOAPY_SDR_TX,chan))
 				sdr.setAntenna(SOAPY_SDR_TX, chan, "TRX")
 				sdr.setFrequency(SOAPY_SDR_TX, chan, "BB", 0) #don't use cordic
+				
+				sdr.setGain(SOAPY_SDR_TX, chan, "PA1", 15)
+				sdr.setGain(SOAPY_SDR_TX, chan, "PA2", 0)
+				sdr.setGain(SOAPY_SDR_TX, chan, "PA3", 30)
+				sdr.setGain(SOAPY_SDR_TX, chan, "PAD", 40) 
+				sdr.setGain(SOAPY_SDR_TX, chan, "ATTN", 0) 
 				
 		### Synchronize Triggers and Clocks ###
 		if chained:
 			self.trig_sdr.writeSetting('SYNC_DELAYS', "")
-			for sdr in self.sdrs: sdr.setHardwareTime(0, "TRIG")
+			for sdr in self.sdrs: sdr.setHardwareTime(0, "TRIGGER")
 			self.trig_sdr.writeSetting("TRIGGER_GEN", "")
 		else:
 			for sdr in self.sdrs: sdr.setHardwareTime(0)  #they'll be a bit off...
@@ -121,24 +141,36 @@ class SISO_SDR:
 	
 	def tx(self, sig, sigimag=None, delay=10000000, continuous=False):		
 		'''Transmit sig on txsdr; repeat indefinitely if continuous.  Returns timestamp of start of tx.'''
+		
 		if self.txsdr is None:
 			print('Error: No TX SDR provided!')
 			return
-		self._txing = continuous
-		if self.txStream is not None: self.txsdr.deactivateStream(self.txStream)
-		self.txStream = self.txsdr.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32, [0], {"REPLAY":"true" if continuous else "false"})
-		
 		if sigimag is not None: sig = np.asarray(sig, dtype=np.complex64) + 1.j*np.asarray(sigimag, dtype=np.complex64)  #hack for matlab...
-		ts = self.trig_sdr.getHardwareTime() + delay #give us delay ns to set everything up.
-		txFlags = SOAPY_SDR_HAS_TIME | SOAPY_SDR_END_BURST
-		self.txsdr.activateStream(self.txStream)
-		sr = self.txsdr.writeStream(self.txStream, [sig.astype(np.complex64)], len(sig), txFlags, timeNs=ts)		
-		if sr.ret != len(sig):
-			print("Bad Write!!!")
-		return ts
+		self._txing = continuous
+		if continuous:
+			replay_addr = 0
+			max_replay = 4096  #todo: read from hardware
+			if(len(sig) > max_replay):
+				print("Warning: Continuous mode signal must be less than %d samples. Using first %d samples." % (max_replay, max_replay) )
+				sig = sig[:max_replay]
+			self.txsdr.writeRegisters('TX_RAM_A', replay_addr, cfloat2uint32(sig).tolist())
+			self.txsdr.writeSetting("TX_REPLAY", str(len(sig)))
+		else:
+			if self.txStream is not None: self.txsdr.deactivateStream(self.txStream)
+			self.txStream = self.txsdr.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32, [0], {})
+		
+		
+			ts = self.trig_sdr.getHardwareTime() + delay #give us delay ns to set everything up.
+			txFlags = SOAPY_SDR_HAS_TIME | SOAPY_SDR_END_BURST
+			self.txsdr.activateStream(self.txStream)
+			sr = self.txsdr.writeStream(self.txStream, [sig.astype(np.complex64)], len(sig), txFlags, timeNs=ts)
+			
+			if sr.ret != len(sig):
+				print("Bad Write!!!")
+			return ts
 	
 	def stop_tx(self):
-		if self.txStream is not None: self.txsdr.deactivateStream(self.txStream)
+		self.txsdr.writeSetting("TX_REPLAY", '')
 		self._txing = False
 	
 	def trx(self, sig, sigimag=None, delay=10000000, rx_delay=57):
@@ -187,7 +219,7 @@ if __name__ == '__main__':
 	parser.add_argument("--rate", type=float, dest="rate", help="Sample rate", default=7.68e6)
 	parser.add_argument("--txGain", type=float, dest="txGain", help="Optional Tx gain (dB)", default=40)
 	parser.add_argument("--rxGain", type=float, dest="rxGain", help="Optional Rx gain (dB)", default=20)
-	parser.add_argument("--freq", type=float, dest="freq", help="Optional Tx freq (Hz)", default=2450e6) 
+	parser.add_argument("--freq", type=float, dest="freq", help="Optional Tx freq (Hz)", default=2450e6)
 	parser.add_argument("--bw", type=float, dest="bw", help="Optional filter bw (Hz)", default=30e6)
 	args = parser.parse_args()
 	
@@ -200,7 +232,9 @@ if __name__ == '__main__':
 		txGain=args.txGain,
 		rxGain=args.rxGain,
 	)
-	nsamps = 7800
+	
+	#Generate signal to send
+	nsamps = 78000*2
 	nsamps_pad = 100
 	s_freq = 500e3
 	Ts = 1/siso_sdr.rate
@@ -208,9 +242,9 @@ if __name__ == '__main__':
 	sig = np.exp(s_time_vals*1j*2*np.pi*s_freq).astype(np.complex64)*.5
 	sig_pad = np.concatenate((np.zeros(nsamps_pad), sig, np.zeros(nsamps_pad)))
 	
-	rx = siso_sdr.trx(sig_pad) if args.txserial is not None else siso_sdr.rx(nsamps)
+	#rx = siso_sdr.trx(sig_pad) if args.txserial is not None else siso_sdr.rx(nsamps)
 	
-	import matplotlib.pyplot as plt
-	plt.plot(rx)
+	#import matplotlib.pyplot as plt
+	#plt.plot(rx)
 	
-	siso_sdr.close()
+	#siso_sdr.close()
