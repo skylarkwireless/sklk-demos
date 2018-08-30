@@ -29,6 +29,22 @@ import os
 import math
 import lts
 
+def cfloat2uint32(arr, order='IQ'):
+		arr_i = (np.real(arr) * 32767).astype(np.uint16)
+		arr_q = (np.imag(arr) * 32767).astype(np.uint16)
+		if order == 'IQ':
+			return np.bitwise_or(arr_q ,np.left_shift(arr_i.astype(np.uint32), 16))
+		else:
+			return np.bitwise_or(arr_i ,np.left_shift(arr_q.astype(np.uint32), 16))
+	
+def uint32tocfloat(arr, order='IQ'):
+	arr_hi = ((np.right_shift(arr, 16).astype(np.int16))/32768.0)
+	arr_lo = (np.bitwise_and(arr, 0xFFFF).astype(np.int16))/32768.0
+	if order == 'IQ':
+		return (arr_hi + 1j*arr_lo).astype(np.complex64)
+	else:
+		return (arr_lo + 1j*arr_hi).astype(np.complex64)
+
 class MIMO_SDR:
 	'''
 		Class that initializes 2+ Irises (based on the serials provided),
@@ -46,7 +62,6 @@ class MIMO_SDR:
 		bw=None,
 		txGain=None,
 		rxGain=None,
-		clockRate=None,
 		rxAnt=None,
 		txAnt=None,
 		serials=None,
@@ -76,7 +91,6 @@ class MIMO_SDR:
 
 		#override default settings
 		for sdr in self.sdrs:
-			if clockRate is not None: sdr.setMasterClockRate(clockRate)
 			for chan in [0, 1]:
 				if rate is not None: sdr.setSampleRate(SOAPY_SDR_RX, chan, rate)
 				if bw is not None: sdr.setBandwidth(SOAPY_SDR_RX, chan, bw)
@@ -92,8 +106,11 @@ class MIMO_SDR:
 				if freq is not None: sdr.setFrequency(SOAPY_SDR_TX, chan, "RF", freq)
 				if txAnt is not None: sdr.setAntenna(SOAPY_SDR_TX, chan, txAnt)
 				sdr.setFrequency(SOAPY_SDR_TX, chan, "BB", 0) #don't use cordic
+				sdr.writeSetting(SOAPY_SDR_RX, chan, 'CALIBRATE', 'SKLK')
+				sdr.writeSetting(SOAPY_SDR_TX, chan, 'CALIBRATE', 'SKLK')
+				sdr.writeSetting('SPI_TDD_MODE', 'MIMO')
 		self.trig_sdr.writeSetting('SYNC_DELAYS', "")
-		for sdr in self.sdrs: sdr.setHardwareTime(0, "TRIG")
+		for sdr in self.sdrs: sdr.setHardwareTime(0, "TRIGGER")
 
 
 		#create rx streams
@@ -105,12 +122,11 @@ class MIMO_SDR:
 		#create tx stream
 		self.txStreams = []
 		for sdr in self.tx_sdrs:
-			print("Create Tx stream")
-			replay = "true" if self.LTSMode else "false"
-			txStream = sdr.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32, [0, 1], {"remote:prot":"tcp", "remote:mtu":"1024" ,"REPLAY":replay})
-			print("Activate Tx Stream, replay=" + replay)
-			sdr.activateStream(txStream)
-			self.txStreams.append(txStream)
+			if not self.LTSMode:
+				txStream = sdr.setupStream(SOAPY_SDR_TX, SOAPY_SDR_CF32, [0, 1], {})
+				sdr.activateStream(txStream)
+				self.txStreams.append(txStream)
+			print("Activate Tx Stream, replay = " + str(self.LTSMode))
 	
 
 		#create our own sinusoid
@@ -143,27 +159,39 @@ class MIMO_SDR:
 
 			usetrig = False
 			for r,sdr in enumerate(self.tx_sdrs):
-				timeNowNs = sdr.getHardwareTime()
-				txTime = timeNowNs + int(1e8)# 100 ms in the future
-				flags = SOAPY_SDR_WAIT_TRIGGER | SOAPY_SDR_END_BURST if usetrig else SOAPY_SDR_END_BURST | SOAPY_SDR_HAS_TIME
-				txStream = self.txStreams[r]
-				sdr.activateStream(txStream)
-				numSent = 0
-				while numSent < len(self.sampsToSend[0]):
-					if usetrig:
-						sr = sdr.writeStream(txStream, [self.sampsToSend[r*2][numSent:], self.sampsToSend[r*2+1][numSent:]], len(self.sampsToSend[0])-numSent, flags)
-					else:
-						sr = sdr.writeStream(txStream, [self.sampsToSend[r*2][numSent:], self.sampsToSend[r*2+1][numSent:]], len(self.sampsToSend[0])-numSent, flags, timeNs=txTime)
-						flags = SOAPY_SDR_END_BURST #clear has time for next call
-					print(sr) 
-					#assertGreater(sr.ret, 0)
-					numSent += sr.ret
-					if sr.ret == -1:
-						print('Bad Write!')
+				replay_addr = 0
+				max_replay = 4096  #todo: read from hardware
+				if(len(self.sampsToSend[0]) > max_replay):
+					print("Warning: Continuous mode signal must be less than %d samples. Using first %d samples." % (max_replay, max_replay) )
+					self.sampsToSend[0] = self.sampsToSend[0][:max_replay]
+					self.sampsToSend[1] = self.sampsToSend[1][:max_replay]
+					
+				sdr.writeRegisters('TX_RAM_A', replay_addr, cfloat2uint32(self.sampsToSend[0]).tolist())
+				sdr.writeRegisters('TX_RAM_B', replay_addr, cfloat2uint32(self.sampsToSend[1]).tolist())
+				sdr.writeSetting("TX_REPLAY", str(len(self.sampsToSend[0])))
 				
-				if usetrig: 
-					time.sleep(0.1) #seems that the tx data may not have gone through both IP stacks and DMA yet, so we need to wait a bit to avoid a race.
-					sdr.writeSetting("TRIGGER_GEN", "")		
+				if False:
+					timeNowNs = sdr.getHardwareTime()
+					txTime = timeNowNs + int(1e8)# 100 ms in the future
+					flags = SOAPY_SDR_WAIT_TRIGGER | SOAPY_SDR_END_BURST if usetrig else SOAPY_SDR_END_BURST | SOAPY_SDR_HAS_TIME
+					txStream = self.txStreams[r]
+					sdr.activateStream(txStream)
+					numSent = 0
+					while numSent < len(self.sampsToSend[0]):
+						if usetrig:
+							sr = sdr.writeStream(txStream, [self.sampsToSend[r*2][numSent:], self.sampsToSend[r*2+1][numSent:]], len(self.sampsToSend[0])-numSent, flags)
+						else:
+							sr = sdr.writeStream(txStream, [self.sampsToSend[r*2][numSent:], self.sampsToSend[r*2+1][numSent:]], len(self.sampsToSend[0])-numSent, flags, timeNs=txTime)
+							flags = SOAPY_SDR_END_BURST #clear has time for next call
+						print(sr) 
+						#assertGreater(sr.ret, 0)
+						numSent += sr.ret
+						if sr.ret == -1:
+							print('Bad Write!')
+					
+					if usetrig: 
+						time.sleep(0.1) #seems that the tx data may not have gone through both IP stacks and DMA yet, so we need to wait a bit to avoid a race.
+						sdr.writeSetting("TRIGGER_GEN", "")		
 
 		else:
 
@@ -217,33 +245,33 @@ class MIMO_SDR:
 		time.sleep(0.05)
 
 		for r,sdr in enumerate(self.rx_sdrs):
+			
 			rxStream = self.rxStreams[r]
-			numRecv = 0
-			while numRecv < len(self.sampsRecv[0]):
-				sr = sdr.readStream(rxStream, [self.sampsRecv[r*2][numRecv:], self.sampsRecv[r*2+1][numRecv:]], len(self.sampsRecv[0])-numRecv, timeoutUs=int(1e6))
-				#print(sr)
-				#assertGreater(sr.ret, 0)
-				numRecv += sr.ret
-				if sr.ret == -1:
-					print('Bad Read!')
-					return -1
+			sr = sdr.readStream(rxStream, [self.sampsRecv[r*2], self.sampsRecv[r*2+1]], len(self.sampsRecv[0]), timeoutUs=int(1e6))
+			if sr.ret != len(self.sampsRecv[0]):
+				print("Bad read!!!")
+				
 			#remove residual DC offset
 			self.sampsRecv[r*2][:] -= np.mean(self.sampsRecv[r*2][:])
 			self.sampsRecv[r*2+1][:] -= np.mean(self.sampsRecv[r*2+1][:])
 		
 		#look at any async messages
-		for r,sdr in enumerate(self.tx_sdrs):
-			txStream = self.txStreams[r]
-			sr = sdr.readStreamStatus(txStream, timeoutUs=int(1e6))
-			#print(sr)
+		if not self.LTSMode:
+			for r,sdr in enumerate(self.tx_sdrs):
+				txStream = self.txStreams[r]
+				sr = sdr.readStreamStatus(txStream, timeoutUs=int(1e6))
+				#print(sr)
 		return self.sampsRecv
 
 	def mimo_test_close(self):
 		#cleanup streams
 		print("Cleanup streams")
 		for r,sdr in enumerate(self.tx_sdrs):
-			sdr.deactivateStream(self.txStreams[r])
-			sdr.closeStream(self.txStreams[r])
+			if self.LTSMode:
+				sdr.writeSetting("TX_REPLAY", '')
+			else:
+				sdr.deactivateStream(self.txStreams[r])
+				sdr.closeStream(self.txStreams[r])
 		#for sdr,rxStream in (rx_sdrs,rxStreams):
 		for r,sdr in enumerate(self.rx_sdrs):
 			sdr.deactivateStream(self.rxStreams[r])
@@ -454,7 +482,6 @@ if __name__ == '__main__':
 	parser.add_option("--rxGain", type="float", dest="rxGain", help="Optional Rx gain (dB)", default=30.0)
 	parser.add_option("--freq", type="float", dest="freq", help="Optional Tx freq (Hz)", default=2350e6) #2484e6) #563e6
 	parser.add_option("--bw", type="float", dest="bw", help="Optional filter bw (Hz)", default=None)
-	parser.add_option("--clockRate", type="float", dest="clockRate", help="Optional clock rate (Hz)", default=80e6)
 	parser.add_option("--serials", type=str, dest="serials", help="SDR Serial Numbers, e.g. 00002 00004", default="0115 0189 0197") #"0127 0125 0120 0113 0111 0106 0107")
 	parser.add_option("--LTSMode", action="store_true", dest="LTSMode", help="LTSMode (Use last radio as standalone in TxReplay mode, then receive on all radios on the array.)", default=True)
 	parser.add_option("--Constellation", action="store_true", dest="ShowConst", help="Send OFDM packets and decode/display constellation.", default=False)
@@ -476,7 +503,6 @@ if __name__ == '__main__':
 		txAnt=options.txAnt,
 		txGain=options.txGain,
 		rxGain=options.rxGain,
-		clockRate=options.clockRate,
 		serials=serials,
 		num_samps=num_samps,
 		LTSMode=options.LTSMode,
