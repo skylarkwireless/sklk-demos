@@ -28,6 +28,7 @@ import time
 import os
 import math
 import lts
+import threading
 
 def cfloat2uint32(arr, order='IQ'):
 		arr_i = (np.real(arr) * 32767).astype(np.uint16)
@@ -77,8 +78,8 @@ class MIMO_SDR:
 
 		#split array in half for normal mode, use last SDR for tx if LTSMode
 		if LTSMode:
-                        self.tx_sdrs = [self.sdrs[-1]]
-                        self.rx_sdrs = self.sdrs[:-1]
+						self.tx_sdrs = [self.sdrs[-1]]
+						self.rx_sdrs = self.sdrs[:-1]
 		else:
 			self.tx_sdrs = self.sdrs[0:len(self.sdrs)//2]
 			self.rx_sdrs = self.sdrs[len(self.sdrs)//2:]
@@ -89,26 +90,13 @@ class MIMO_SDR:
 
 		print("Using %i tx Irises and %i rx Irises." % (len(self.tx_sdrs), len(self.rx_sdrs)) )
 
-		#override default settings
-		for sdr in self.sdrs:
-			for chan in [0, 1]:
-				if rate is not None: sdr.setSampleRate(SOAPY_SDR_RX, chan, rate)
-				if bw is not None: sdr.setBandwidth(SOAPY_SDR_RX, chan, bw)
-				if rxGain is not None: sdr.setGain(SOAPY_SDR_RX, chan, rxGain)
-				if freq is not None: sdr.setFrequency(SOAPY_SDR_RX, chan, "RF", freq)
-				if rxAnt is not None: sdr.setAntenna(SOAPY_SDR_RX, chan, rxAnt)
-				sdr.setFrequency(SOAPY_SDR_RX, chan, "BB", 0) #don't use cordic
-				sdr.setDCOffsetMode(SOAPY_SDR_RX, chan, True) #dc removal on rx
-
-				if rate is not None: sdr.setSampleRate(SOAPY_SDR_TX, chan, rate)
-				if bw is not None: sdr.setBandwidth(SOAPY_SDR_TX, chan, bw)
-				if txGain is not None: sdr.setGain(SOAPY_SDR_TX, chan, txGain)
-				if freq is not None: sdr.setFrequency(SOAPY_SDR_TX, chan, "RF", freq)
-				if txAnt is not None: sdr.setAntenna(SOAPY_SDR_TX, chan, txAnt)
-				sdr.setFrequency(SOAPY_SDR_TX, chan, "BB", 0) #don't use cordic
-				sdr.writeSetting(SOAPY_SDR_RX, chan, 'CALIBRATE', 'SKLK')
-				sdr.writeSetting(SOAPY_SDR_TX, chan, 'CALIBRATE', 'SKLK')
-				sdr.writeSetting('SPI_TDD_MODE', 'MIMO')
+		#initialize in parallel
+		self.sdrs = SoapySDR.Device([dict(driver='iris',serial=s) for s in serials])
+		threads = [threading.Thread(target=self.initSDR, args=[sdr, rate, freq, bw, txGain, rxGain, rxAnt, txAnt]) for sdr in self.sdrs]
+		for t in threads: t.start()
+		for t in threads: t.join()
+		
+		#Sync timestamps with trigger
 		self.trig_sdr.writeSetting('SYNC_DELAYS', "")
 		for sdr in self.sdrs: sdr.setHardwareTime(0, "TRIGGER")
 
@@ -206,6 +194,50 @@ class MIMO_SDR:
 
 		print("Done initializing MIMOGui.")
 
+	@staticmethod
+	def initSDR(sdr,
+		rate,
+		freq=None,
+		bw=None,
+		txGain=None,
+		rxGain=None,
+		rxAnt=None,
+		txAnt=None,
+	):		
+		info = sdr.getHardwareInfo();
+		for chan in [0, 1]:
+			if rate is not None: sdr.setSampleRate(SOAPY_SDR_RX, chan, rate)
+			if bw is not None: sdr.setBandwidth(SOAPY_SDR_RX, chan, bw)
+			if rxGain is not None: sdr.setGain(SOAPY_SDR_RX, chan, rxGain)
+			if freq is not None: sdr.setFrequency(SOAPY_SDR_RX, chan, "RF", freq)
+			if rxAnt is not None: sdr.setAntenna(SOAPY_SDR_RX, chan, rxAnt)
+			sdr.setFrequency(SOAPY_SDR_RX, chan, "BB", 0) #don't use cordic
+			sdr.setDCOffsetMode(SOAPY_SDR_RX, chan, True) #dc removal on rx
+
+			if rate is not None: sdr.setSampleRate(SOAPY_SDR_TX, chan, rate)
+			if bw is not None: sdr.setBandwidth(SOAPY_SDR_TX, chan, bw)
+			if txGain is not None: sdr.setGain(SOAPY_SDR_TX, chan, txGain)
+			if freq is not None: sdr.setFrequency(SOAPY_SDR_TX, chan, "RF", freq)
+			if txAnt is not None: sdr.setAntenna(SOAPY_SDR_TX, chan, txAnt)
+
+			if ("CBRS" in info["frontend"]):
+				sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN', 0) #[-18,0]
+				sdr.setGain(SOAPY_SDR_RX, chan, 'LNA2', 17) #[0,17]
+				
+				sdr.setGain(SOAPY_SDR_TX, chan, 'ATTN', 0) #[-18,0] by 3
+				sdr.setGain(SOAPY_SDR_TX, chan, 'PA2', 0) #[0|15]	
+				
+			if ("UHF" in info["frontend"]):
+				sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN1', 0) #[-18,0]
+				sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN2', 0) #[-18,0]	
+				
+				sdr.setGain(SOAPY_SDR_TX, chan, 'ATTN', 0) #[-18,0] by 3
+				
+			sdr.setFrequency(SOAPY_SDR_TX, chan, "BB", 0) #don't use cordic
+			#sdr.writeSetting(SOAPY_SDR_RX, chan, 'CALIBRATE', 'SKLK')
+			#sdr.writeSetting(SOAPY_SDR_TX, chan, 'CALIBRATE', 'SKLK')
+			#sdr.writeSetting('SPI_TDD_MODE', 'MIMO')		
+			
 
 	def getSamples(self):
 		#print("getSamples()")
@@ -480,10 +512,10 @@ if __name__ == '__main__':
 	parser.add_option("--txAnt", type="string", dest="txAnt", help="Optional Tx antenna (TRX)", default="TRX")
 	parser.add_option("--txGain", type="float", dest="txGain", help="Optional Tx gain (dB)", default=40.0)
 	parser.add_option("--rxGain", type="float", dest="rxGain", help="Optional Rx gain (dB)", default=30.0)
-	parser.add_option("--freq", type="float", dest="freq", help="Optional Tx freq (Hz)", default=2350e6) #2484e6) #563e6
+	parser.add_option("--freq", type="float", dest="freq", help="Optional Tx freq (Hz)", default=2484e6)
 	parser.add_option("--bw", type="float", dest="bw", help="Optional filter bw (Hz)", default=None)
-	parser.add_option("--serials", type=str, dest="serials", help="SDR Serial Numbers, e.g. 00002 00004", default="0115 0189 0197") #"0127 0125 0120 0113 0111 0106 0107")
-	parser.add_option("--LTSMode", action="store_true", dest="LTSMode", help="LTSMode (Use last radio as standalone in TxReplay mode, then receive on all radios on the array.)", default=True)
+	parser.add_option("--serials", type=str, dest="serials", help="SDR Serial Numbers, e.g. 00002 00004", default=None)
+	parser.add_option("--LTSMode", action="store_true", dest="LTSMode", help="LTSMode (Use last radio as standalone in TxReplay mode, then receive on all radios on the array.)", default=False)
 	parser.add_option("--Constellation", action="store_true", dest="ShowConst", help="Send OFDM packets and decode/display constellation.", default=False)
 	
 	(options, args) = parser.parse_args()
