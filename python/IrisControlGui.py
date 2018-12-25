@@ -35,7 +35,8 @@ class MainWindow(QMainWindow):
         #start the window
         self._controlTabs = QTabWidget(self)
         self.setCentralWidget(self._controlTabs)
-        self._controlTabs.addTab(HighLevelControlTab(iris, [0, 1], self._controlTabs), "Main")
+        self._mainTab = HighLevelControlTab(iris, [0, 1], self._controlTabs)
+        self._controlTabs.addTab(self._mainTab, "Main")
         for name, chans, start, stop in [
             ('LML', [0,], 0x0000, 0x002F),
             ('TxTSP', [0, 1], 0x0200, 0x020C),
@@ -65,6 +66,9 @@ class MainWindow(QMainWindow):
 
         #load complete
         self._splash.finish(self)
+
+    def loadFile(self, filePath):
+        self._mainTab.loadFile(filePath)
 
     def closeEvent(self, event):
 
@@ -304,6 +308,15 @@ class HighLevelControlTab(QWidget):
             functools.partial(self._iris.getAntenna, direction, ch),
             [direction, ch, 'Antenna'])
         self.loadArbitrarySettings(parent, formLayout, [direction, ch])
+        if self._iris.hasDCOffsetMode(direction, ch):
+            info = SoapySDR.ArgInfo()
+            info.type = info.BOOL
+            edit = ArbitrarySettingsWidget(info, self)
+            formLayout.addRow("DC Removal", edit)
+            self.loadEditWidget(edit,
+                lambda v: iris.setDCOffsetMode(direction, ch, v == "true"),
+                lambda: "true" if iris.getDCOffsetMode(direction, ch) else "false",
+                [direction, ch, 'DC Removal'])
         sklkCalButton = QPushButton("SKLK Calibrate", parent)
         sklkCalButton.pressed.connect(functools.partial(self._iris.writeSetting, direction, ch, "CALIBRATE", "SKLK"))
         formLayout.addRow("Self Calibrate", sklkCalButton)
@@ -354,7 +367,10 @@ class HighLevelControlTab(QWidget):
     def _handleLoadDialog(self):
         fname = QFileDialog.getOpenFileName(self, "Open saved config file", ".", "Config (*.json)")
         if not fname: return
-        config = json.loads(open(fname[0]).read())
+        self.loadFile(fname[0])
+
+    def loadFile(self, fname):
+        config = json.loads(open(fname).read())
         r20 = self._iris.readRegister('LMS7IC', 0x0020) & ~0x3
         for ch in [0, 1]:
             self._iris.writeRegister('LMS7IC', 0x0020, r20 | (ch+1))
@@ -364,7 +380,7 @@ class HighLevelControlTab(QWidget):
             try:
                 if len(args) == 1: setter(config['global'][args[0]])
                 else: setter(config['tx' if args[0] == SOAPY_SDR_TX else 'rx'][args[1]][args[2]])
-            except KeyError: pass
+            except (IndexError, KeyError): print('Could not find %s in config...'%str(args))
         self.showEvent(None) #reload
 
 ########################################################################
@@ -382,6 +398,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--args", help="Device arguments (or none for selection dialog)")
+    parser.add_argument("--file", help="Load saved config when specified")
     args = parser.parse_args()
     handle = args.args
 
@@ -401,4 +418,5 @@ if __name__ == '__main__':
 
     w = MainWindow(iris=iris, settings=settings, handle=handle)
     w.show()
+    if args.file: w.loadFile(args.file)
     sys.exit(app.exec_())
