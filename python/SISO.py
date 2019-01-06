@@ -99,7 +99,10 @@ class SISO_SDR:
 				sdr.setGain(SOAPY_SDR_TX, chan, "PA3", 30)
 				sdr.setGain(SOAPY_SDR_TX, chan, "PAD", 40) 
 				sdr.setGain(SOAPY_SDR_TX, chan, "ATTN", 0) 
-				
+				if ("UHF" in info["frontend"]):
+					sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN1', -6) #[-18,0]
+					sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN2', -12) #[-18,0]
+					sdr.setGain(SOAPY_SDR_TX, chan, 'ATTN', 0) #[-18,0]
 		### Synchronize Triggers and Clocks ###
 		if chained:
 			self.trig_sdr.writeSetting('SYNC_DELAYS', "")

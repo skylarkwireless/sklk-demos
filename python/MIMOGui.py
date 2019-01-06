@@ -228,8 +228,8 @@ class MIMO_SDR:
 				sdr.setGain(SOAPY_SDR_TX, chan, 'PA2', 0) #[0|15]	
 				
 			if ("UHF" in info["frontend"]):
-				sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN1', 0) #[-18,0]
-				sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN2', 0) #[-18,0]	
+				sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN1', -6) #[-18,0]
+				sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN2', -12) #[-18,0]	
 				
 				sdr.setGain(SOAPY_SDR_TX, chan, 'ATTN', 0) #[-18,0] by 3
 				
