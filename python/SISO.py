@@ -77,6 +77,7 @@ class SISO_SDR:
 		
 		### Setup channel rates, ports, gains, and filters ###
 		for sdr in self.sdrs:
+			info = sdr.getHardwareInfo()
 			for chan in [0]:
 				if rate is not None: sdr.setSampleRate(SOAPY_SDR_RX, chan, rate)
 				if bw is not None: sdr.setBandwidth(SOAPY_SDR_RX, chan, bw)
@@ -94,11 +95,12 @@ class SISO_SDR:
 				sdr.setAntenna(SOAPY_SDR_TX, chan, "TRX")
 				sdr.setFrequency(SOAPY_SDR_TX, chan, "BB", 0) #don't use cordic
 				
-				sdr.setGain(SOAPY_SDR_TX, chan, "PA1", 15)
-				sdr.setGain(SOAPY_SDR_TX, chan, "PA2", 0)
-				sdr.setGain(SOAPY_SDR_TX, chan, "PA3", 30)
-				sdr.setGain(SOAPY_SDR_TX, chan, "PAD", 40) 
-				sdr.setGain(SOAPY_SDR_TX, chan, "ATTN", 0) 
+				if ("CBRS" in info["frontend"]):
+					#sdr.setGain(SOAPY_SDR_TX, chan, "PA1", 15)
+					sdr.setGain(SOAPY_SDR_TX, chan, "PA2", 0)
+					#sdr.setGain(SOAPY_SDR_TX, chan, "PA3", 30)
+					#sdr.setGain(SOAPY_SDR_TX, chan, "PAD", 40) 
+					sdr.setGain(SOAPY_SDR_TX, chan, "ATTN", 0) 
 				if ("UHF" in info["frontend"]):
 					sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN1', -6) #[-18,0]
 					sdr.setGain(SOAPY_SDR_RX, chan, 'ATTN2', -12) #[-18,0]
