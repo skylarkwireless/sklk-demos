@@ -247,6 +247,7 @@ class HighLevelControlTab(QWidget):
         layout = QGridLayout(self)
         self._editWidgets = list()
         self._iris = iris
+        self._txReplayWaveform = ""
 
         #global configuration parameters
         groupBox = QGroupBox("Global", self)
@@ -262,6 +263,19 @@ class HighLevelControlTab(QWidget):
             self.loadEditWidget(edit, setter, getter, [name])
         self.loadArbitrarySettings(groupBox, formLayout)
 
+        info = SoapySDR.ArgInfo()
+        info.type = info.STRING
+        info.options.push_back("")
+        info.options.push_back("LTS")
+        info.optionNames.push_back("Off")
+        info.optionNames.push_back("LTS")
+        edit = ArbitrarySettingsWidget(info, self)
+        formLayout.addRow("TX Replay Waveform", edit)
+        self.loadEditWidget(edit,
+            self.setupTxReplay,
+            lambda: self._txReplayWaveform,
+            ['Tx Waveform'])
+
         loadConfigButton = QPushButton("Load Config", groupBox)
         formLayout.addRow(loadConfigButton)
         loadConfigButton.pressed.connect(self._handleLoadDialog)
@@ -275,6 +289,29 @@ class HighLevelControlTab(QWidget):
                 groupBox = QGroupBox(("Rx" if direction == SOAPY_SDR_RX else "Tx") + " Ch"+"AB"[ch], self)
                 layout.addWidget(groupBox, 0 if direction == SOAPY_SDR_RX else 1, ch+1, 1, 1)
                 self.loadChannelSettings(groupBox, direction, ch)
+
+    def setupTxReplay(self, name):
+        self._txReplayWaveform = name
+
+        #empty string to disable
+        if not name: return iris.writeSetting("TX_REPLAY", "")
+
+        if name == "LTS":
+            import lts
+            samps = lts.genLTS()
+
+        #TODO others
+
+        def cfloat2uint32(arr):
+            import numpy as np
+            arr_i = (np.real(arr) * 32767).astype(np.uint16)
+            arr_q = (np.imag(arr) * 32767).astype(np.uint16)
+            return np.bitwise_or(arr_q ,np.left_shift(arr_i.astype(np.uint32), 16))
+
+        samps = cfloat2uint32(samps)
+        self._iris.writeRegisters('TX_RAM_A', 0, cfloat2uint32(samps).tolist())
+        self._iris.writeRegisters('TX_RAM_B', 0, cfloat2uint32(samps).tolist())
+        self._iris.writeSetting("TX_REPLAY", str(len(samps)))
 
     def loadChannelSettings(self, parent, direction, ch):
         hbox = QHBoxLayout(parent)
