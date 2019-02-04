@@ -374,7 +374,10 @@ class HighLevelControlTab(QWidget):
                 prefixArgs + [info.name])
 
     def loadEditWidget(self, edit, setter, getter, args):
-        edit.valueChanged.connect(setter)
+        def safeCall(s, v):
+            try: s(v)
+            except Exception as ex: print(ex)
+        edit.valueChanged.connect(functools.partial(safeCall, setter))
         self._editWidgets.append((edit, setter, getter, args))
 
     def showEvent(self, e):
