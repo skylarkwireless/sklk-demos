@@ -82,7 +82,9 @@ class MainWindow(QMainWindow):
 ## Parse the fields from the LMS7 source
 ########################################################################
 import re
-paramsH = open('data/LMS7002M_parameters.h').read()
+import os
+
+paramsH = open(os.path.join(os.path.dirname(__file__), 'data', 'LMS7002M_parameters.h')).read()
 PARAMS = list()
 ADDRS = set()
 for match in re.findall('static const struct LMS7Parameter ((LMS7_\w+)\s*=\s*{\s*(0x*.+?)}\s*;)', paramsH, re.MULTILINE | re.DOTALL):
