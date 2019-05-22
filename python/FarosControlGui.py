@@ -49,8 +49,9 @@ class MainWindow(QMainWindow):
         #start the window
         self._controlTabs = QTabWidget(self)
         self.setCentralWidget(self._controlTabs)
-        self._mainTab = HighLevelControlTab(irises, [0, 1], self._controlTabs)
+        self._mainTab = HighLevelControlTab(irises, [0, 1], self.setIris, self._controlTabs)
         self._controlTabs.addTab(self._mainTab, "Main")
+        self._tabs = {}
         for name, chans, start, stop in [
             ('LML', [0,], 0x0000, 0x002F),
             ('TxTSP', [0, 1], 0x0200, 0x020C),
@@ -69,8 +70,8 @@ class MainWindow(QMainWindow):
             ('CGEN', [0,], 0x0086, 0x008D),
         ]:
             scroll = QScrollArea(self._controlTabs)
-            tab = LowLevelControlTab(irises, chans, start, stop, scroll)
-            scroll.setWidget(tab)
+            self._tabs[name] = LowLevelControlTab(irises, chans, start, stop, scroll)
+            scroll.setWidget(self._tabs[name])
             self._controlTabs.addTab(scroll, name)
 
         #load previous settings
@@ -84,6 +85,10 @@ class MainWindow(QMainWindow):
 
     def loadFile(self, filePath):
         self._mainTab.loadFile(filePath)
+
+    def setIris(self, iris):
+        for k,tab in self._tabs.items():
+            tab._iris = iris #lazy, not implementing setter
 
     def closeEvent(self, event):
 
@@ -252,6 +257,7 @@ from PyQt5.QtWidgets import QDoubleSpinBox
 from PyQt5.QtWidgets import QPushButton
 #from PyQt5.QtWidgets import QHBoxLayout
 from PyQt5.QtWidgets import QFileDialog
+from PyQt5.QtWidgets import QRadioButton
 from SoapySDR import *
 from sklk_widgets import FreqEntryWidget
 from sklk_widgets import ArbitrarySettingsWidget
@@ -260,9 +266,10 @@ import functools
 import json
 
 class HighLevelControlTab(QWidget):
-    def __init__(self, irises, chans, parent = None):
+    def __init__(self, irises, chans, setIrisCallback, parent = None):
         QWidget.__init__(self, parent)
         layout = QGridLayout(self)
+        self._setIrisCallback = setIrisCallback
         self._editWidgets = list()
         self._iris = irises[0]
         self._irises = irises
@@ -281,6 +288,17 @@ class HighLevelControlTab(QWidget):
             formLayout.addRow(name, edit)
             self.loadEditWidget(edit, setter, getter, [name])
         self.loadArbitrarySettings(groupBox, formLayout)
+
+        if len(irises) > 1:
+            irisGroupBox = QGroupBox("Iris Readback Select (Experimental!)", self)
+            layout.addWidget(irisGroupBox, 2, 0, 1, 3, Qt.AlignHCenter)
+            irisRadioLayout = QHBoxLayout(irisGroupBox)
+            self._irisRadioButtons = [QRadioButton(iris.getHardwareInfo()['serial'], irisGroupBox) for iris in irises]
+            #for i,r in (irises,self._irisRadioButtons): r.iris = i
+            self._irisRadioButtons[0].setChecked(True)
+            for i,r in zip(irises,self._irisRadioButtons): 
+                irisRadioLayout.addWidget(r)
+                r.toggled.connect(functools.partial(self.setIris, i))
 
         info = SoapySDR.ArgInfo()
         info.type = info.STRING
@@ -307,7 +325,14 @@ class HighLevelControlTab(QWidget):
                 groupBox = QGroupBox(("Rx" if direction == SOAPY_SDR_RX else "Tx") + " Ch"+"AB"[ch], self)
                 layout.addWidget(groupBox, 0 if direction == SOAPY_SDR_RX else 1, ch+1, 1, 1)
                 self.loadChannelSettings(groupBox, direction, ch)
-
+    
+    def setIris(self, iris, checked):
+        print("Iris %s selected for readback." % iris.getHardwareInfo()['serial'])
+        if checked:
+            self._iris = iris
+            self._setIrisCallback(iris)
+            self.showEvent(None) #reload the values
+            
     def setupTxReplay(self, name):
         self._txReplayWaveform = name
 
