@@ -1,8 +1,11 @@
+
+
 ########################################################################
 ## Device selection dialog
 ########################################################################
 from PyQt5.QtWidgets import QDialog
 from PyQt5.QtWidgets import QListWidget
+from PyQt5.QtWidgets import QAbstractItemView
 from PyQt5.QtWidgets import QGroupBox
 from PyQt5.QtWidgets import QVBoxLayout
 from PyQt5.QtWidgets import QHBoxLayout
@@ -19,24 +22,28 @@ DEVICE_POLL_TIME = 1.5 #seconds between poll
 class DeviceSelectionDialog(QDialog):
 
     #signals
-    deviceSelected = pyqtSignal(dict)
+    devicesSelected = pyqtSignal(object) #ugh, have to use object so we can emit a list or a dict (for backwards compatibility)
     deviceListQueried = pyqtSignal(list)
 
-    def __init__(self, channelSelect=False, timeSelect=False, settings=None, parent = None):
+    def __init__(self, channelSelect=False, timeSelect=False, settings=None, multiDevice=False, parent = None):
         QDialog.__init__(self, parent)
         self.setWindowTitle('Select a device...')
         self._layout = QVBoxLayout(self)
         self._timeSelect = timeSelect
         self._channelSelect = channelSelect
+        self._multiDevice = multiDevice
 
         configLayout = QHBoxLayout()
         self._layout.addLayout(configLayout)
 
-        selectButton = QPushButton("Select Device", self)
-        selectButton.clicked.connect(lambda: self._handleListDoubleClicked(self._list.currentItem()))
+        selectButton = QPushButton("Select Device(s)", self)
+        selectButton.clicked.connect(self._handleSelectClicked) #lambda: self._handleListDoubleClicked(self._list.currentItem()))
         selectButton.setEnabled(False)
-
+        self._selectButton = selectButton
+        
         self._list = QListWidget(self)
+        if multiDevice:
+            self._list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._list.itemSelectionChanged.connect(lambda: selectButton.setEnabled(True))
         self._list.itemDoubleClicked.connect(self._handleListDoubleClicked)
         self._layout.addWidget(self._list)
@@ -57,7 +64,7 @@ class DeviceSelectionDialog(QDialog):
 
         self.deviceListQueried.connect(self._handleDeviceListQueried)
         self._knownDevices = list()
-        self._deviceHandle = None
+        self._deviceHandles = []
 
         self._thread = None
         self._updateTimer = QTimer(self)
@@ -75,7 +82,9 @@ class DeviceSelectionDialog(QDialog):
 
         self.finished.connect(self._handleFinished)
 
-    def deviceHandle(self): return self._deviceHandle
+    def devicesHandle(self): return self._deviceHandles
+    
+    def deviceHandle(self): return self._deviceHandles[0]
 
     def showTime(self): return self._timeCheckBox.isChecked()
 
@@ -99,20 +108,29 @@ class DeviceSelectionDialog(QDialog):
 
     def _handleDeviceListQueried(self, devices):
         if devices == self._knownDevices: return
-        #reload the widget
+        #reload the 
+        self._selectButton.setEnabled(False)
         self._list.clear()
         self._knownDevices = devices
         for device in self._knownDevices: self._list.addItem(device['label'])
+        #todo reselect devices
 
     def _handleListDoubleClicked(self, item):
         row = self._list.row(item)
-        args = self._knownDevices[row]
-        #print(str(args))
-        self._deviceHandle = args
-        self.deviceSelected.emit(args)
+        args = [self._knownDevices[row]]
+        self._deviceHandles = args
+        self.devicesSelected.emit(args if self._multiDevice else args[0])
+        self.accept()
+
+    def _handleSelectClicked(self):
+        rows = self._list.selectedItems()
+        args = [self._knownDevices[self._list.row(row)] for row in rows]
+        self._deviceHandles = args
+        self.devicesSelected.emit(args if self._multiDevice else args[0])
         self.accept()
 
     def _handleUpdateTimeout(self):
         if self._thread is not None and self._thread.isAlive(): return
         self._thread = threading.Thread(target=self._queryDeviceListThread)
         self._thread.start()
+

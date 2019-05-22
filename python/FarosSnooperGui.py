@@ -13,7 +13,7 @@
 #
 #	(c) info@skylarkwireless.com 2019
 
-#TODO:  It seems very slow.  Also, it looks like list update deselects items.
+#TODO:  It looks like list update deselects items (this happens when the list changes, e.g., a new iris was discovered.)
 
 ########################################################################
 ## Main window
@@ -94,18 +94,20 @@ class PlotterWidgets(QWidget):
         self._txGain = [[0,0] for handle in handles]
         self._devices = [SoapySDR.Device(handle) for handle in handles]
         
+         
+        
         #figs = [Figure(figsize=(width, height), dpi=dpi) for d in self._devices]
         fig = Figure(figsize=(width, height), dpi=dpi)
         ndev = len(self._devices)
         ntime = len(chans) if showTime else 0
-        ncol = ndev*(ntime+1) // 3 if ndev*(ntime+1) < 13 else ndev*(ntime+1) // (4+ntime)
-        nrows = (ntime+1)*np.ceil(ndev/ncol)
+        ncols = np.ceil(ndev*(ntime+1) / 3) if ndev*(ntime+1) < 12 else ndev*(ntime+1) // 4
+        nrows = (ntime+1)*np.ceil(ndev/ncols)
         
         self._axFreq = [None for d in range(ndev)]
         self._axTime = [None for d in range(ndev)]
         for d in range(ndev):
-            self._axFreq[d] = fig.add_subplot(nrows, ncol, 1 + ncol*(1+ntime)*(d//ncol)+d%ncol) 
-            self._axTime[d] = [fig.add_subplot(nrows, ncol, 1 + ncol*(1+ntime)*(d//ncol)+d%ncol + (i+1)*ncol) for i in range(ntime)]
+            self._axFreq[d] = fig.add_subplot(nrows, ncols, 1 + ncols*(1+ntime)*(d//ncols)+d%ncols) 
+            self._axTime[d] = [fig.add_subplot(nrows, ncols, 1 + ncols*(1+ntime)*(d//ncols)+d%ncols + (i+1)*ncols) for i in range(ntime)]
         fig.tight_layout()
         self._figure = FigureCanvas(fig)
         self._figure.setParent(self)
@@ -118,6 +120,8 @@ class PlotterWidgets(QWidget):
         self.snooperComplete.connect(self._handleSnooperComplete)
         self._threads = [threading.Thread(target=self._snoopChannels,args=[d]) for d in range(ndev)]
         self._mutex = [threading.Lock() for d in range(ndev)]
+        self._drawMutex = threading.Lock()
+        self._lastDraw = time.time()
         self._dataInFlight = [0 for d in range(ndev)]
         for d in range(ndev): self._threads[d].start()
 
@@ -164,8 +168,10 @@ class PlotterWidgets(QWidget):
 
         if self._axTime[device]: self._axTime[device][-1].set_xlabel('Time (ms)', fontsize=fontsize)
         
-        if device == 0: #todo: make draw a seperate thread
-            self._figure.draw() 
+        with self._drawMutex:
+            if time.time() - self._lastDraw > .05:
+                self._figure.draw() 
+                self._lastDraw = time.time()
 
     def _snoopChannels(self, device):
         dev = self._devices[device]
@@ -197,143 +203,16 @@ class PlotterWidgets(QWidget):
             if dev is None: continue
             with self._mutex[device]: self._dataInFlight[device] += 1
             self.snooperComplete.emit(sampleses, device)
-            #time.sleep(0.1)
-
-
-########################################################################
-## Device selection dialog
-########################################################################
-from PyQt5.QtWidgets import QDialog
-from PyQt5.QtWidgets import QListWidget
-from PyQt5.QtWidgets import QAbstractItemView
-from PyQt5.QtWidgets import QGroupBox
-from PyQt5.QtWidgets import QVBoxLayout
-from PyQt5.QtWidgets import QHBoxLayout
-from PyQt5.QtWidgets import QRadioButton
-from PyQt5.QtWidgets import QPushButton
-from PyQt5.QtWidgets import QCheckBox
-from PyQt5.QtCore import QTimer
-from PyQt5.QtCore import pyqtSignal
-#import SoapySDR
-#import threading
-
-DEVICE_POLL_TIME = 1.5 #seconds between poll
-
-class DevicesSelectionDialog(QDialog):
-
-    #signals
-    devicesSelected = pyqtSignal(list)
-    deviceListQueried = pyqtSignal(list)
-
-    def __init__(self, channelSelect=False, timeSelect=False, settings=None, parent = None):
-        QDialog.__init__(self, parent)
-        self.setWindowTitle('Select a device...')
-        self._layout = QVBoxLayout(self)
-        self._timeSelect = timeSelect
-        self._channelSelect = channelSelect
-
-        configLayout = QHBoxLayout()
-        self._layout.addLayout(configLayout)
-
-        selectButton = QPushButton("Select Device(s)", self)
-        selectButton.clicked.connect(self._handleSelectClicked) #lambda: self._handleListDoubleClicked(self._list.currentItem()))
-        selectButton.setEnabled(False)
-
-        self._list = QListWidget(self)
-        self._list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self._list.itemSelectionChanged.connect(lambda: selectButton.setEnabled(True))
-        self._list.itemDoubleClicked.connect(self._handleListDoubleClicked)
-        self._layout.addWidget(self._list)
-        self._layout.addWidget(selectButton)
-
-        if channelSelect:
-            chanGroupBox = QGroupBox("Channel select", self)
-            configLayout.addWidget(chanGroupBox)
-            chanRadioLayout = QVBoxLayout(chanGroupBox)
-            self._chOptions = ("AB", "A", "B")
-            self._chanRadioButtons = [QRadioButton(chan, chanGroupBox) for chan in self._chOptions]
-            for r in self._chanRadioButtons: chanRadioLayout.addWidget(r)
-
-        if timeSelect:
-            self._timeCheckBox = QCheckBox("Show time plots", self)
-            configLayout.addWidget(self._timeCheckBox)
-            self._timeCheckBox.setChecked(False)
-
-        self.deviceListQueried.connect(self._handleDeviceListQueried)
-        self._knownDevices = list()
-        self._deviceHandles = []
-
-        self._thread = None
-        self._updateTimer = QTimer(self)
-        self._updateTimer.setInterval(DEVICE_POLL_TIME*1000) #milliseconds
-        self._updateTimer.timeout.connect(self._handleUpdateTimeout)
-        self._handleUpdateTimeout() #initial update
-        self._updateTimer.start()
-
-        self._settings = settings
-        if self._settings:
-            if timeSelect: self._timeCheckBox.setChecked(self._settings.value("DevicesSelectionDialog/timeSelect", False, type=bool))
-            if channelSelect:
-                sel = self._settings.value("DevicesSelectionDialog/channelSelect", "AB")
-                for i, opt in enumerate(self._chOptions): self._chanRadioButtons[i].setChecked(opt == sel)
-
-        self.finished.connect(self._handleFinished)
-
-    def devicesHandle(self): return self._deviceHandles
-
-    def showTime(self): return self._timeCheckBox.isChecked()
-
-    def channels(self):
-        for i, r in enumerate(self._chanRadioButtons):
-            if r.isChecked(): return self._chOptions[i]
-
-    def _handleFinished(self, num):
-        if self._settings:
-            if self._timeSelect: self._settings.setValue("DevicesSelectionDialog/timeSelect", self._timeCheckBox.isChecked())
-            if self._channelSelect: self._settings.setValue("DevicesSelectionDialog/channelSelect", self.channels())
-            self._settings.sync()
-        if self._thread is not None:
-            self._thread.join()
-            self._thread = None
-
-    def _queryDeviceListThread(self):
-        self.deviceListQueried.emit([dict(elem) for elem in sorted(SoapySDR.Device.enumerate(dict(driver="iris")), key=lambda x: x['serial'])])
-
-    #private slots
-
-    def _handleDeviceListQueried(self, devices):
-        if devices == self._knownDevices: return
-        #reload the widget
-        self._list.clear()
-        self._knownDevices = devices
-        for device in self._knownDevices: self._list.addItem(device['label'])
-
-    def _handleListDoubleClicked(self, item):
-        row = self._list.row(item)
-        args = [self._knownDevices[row]]
-        self._deviceHandles = args
-        self.devicesSelected.emit(args)
-        self.accept()
-
-    def _handleSelectClicked(self):
-        rows = self._list.selectedItems()
-        args = [self._knownDevices[self._list.row(row)] for row in rows]
-        self._deviceHandles = args
-        self.devicesSelected.emit(args)
-        self.accept()
-
-    def _handleUpdateTimeout(self):
-        if self._thread is not None and self._thread.isAlive(): return
-        self._thread = threading.Thread(target=self._queryDeviceListThread)
-        self._thread.start()
-
+            while self._dataInFlight[device] and self._running:
+                time.sleep(.05)
+                
 
 ########################################################################
 ## Invoke the application
 ########################################################################
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QSettings
-#from sklk_widgets import DevicesSelectionDialog #todo, make seperate file
+from sklk_widgets import DeviceSelectionDialog
 import argparse
 import sys
 
@@ -355,7 +234,7 @@ if __name__ == '__main__':
     handles = []
     #pick a device to open
     if not handles:
-        dialog = DevicesSelectionDialog(channelSelect=True, timeSelect=True, settings=settings)
+        dialog = DeviceSelectionDialog(channelSelect=True, timeSelect=True, settings=settings, multiDevice=True)
         dialog.exec()
         handles = dialog.devicesHandle()
         showTime = dialog.showTime()
