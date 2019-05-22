@@ -234,7 +234,7 @@ if __name__ == '__main__':
     handles = []
     #pick a device to open
     if not handles:
-        dialog = DeviceSelectionDialog(channelSelect=True, timeSelect=True, settings=settings, multiDevice=True)
+        dialog = DeviceSelectionDialog(channelSelect=True, timeSelect=True, settings=settings, multiDevice=True, FEfilter=True)
         dialog.exec()
         handles = dialog.devicesHandle()
         showTime = dialog.showTime()

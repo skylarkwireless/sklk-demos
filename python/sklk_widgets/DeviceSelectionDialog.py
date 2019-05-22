@@ -1,4 +1,15 @@
-
+#!/usr/bin/python3
+#
+#	Graphical utility for selecting Irises on the network.
+#
+#	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+#	INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+#	PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+#	FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+#	OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+#	DEALINGS IN THE SOFTWARE.
+#
+#	(c) info@skylarkwireless.com 2019
 
 ########################################################################
 ## Device selection dialog
@@ -25,23 +36,33 @@ class DeviceSelectionDialog(QDialog):
     devicesSelected = pyqtSignal(object) #ugh, have to use object so we can emit a list or a dict (for backwards compatibility)
     deviceListQueried = pyqtSignal(list)
 
-    def __init__(self, channelSelect=False, timeSelect=False, settings=None, multiDevice=False, parent = None):
+    def __init__(self, channelSelect=False, timeSelect=False, settings=None, multiDevice=False, FEfilter=True, parent = None):
         QDialog.__init__(self, parent)
         self.setWindowTitle('Select a device...')
         self._layout = QVBoxLayout(self)
         self._timeSelect = timeSelect
         self._channelSelect = channelSelect
         self._multiDevice = multiDevice
+        self._FEfilter = FEfilter
 
         configLayout = QHBoxLayout()
         self._layout.addLayout(configLayout)
-
+        if self._FEfilter: #FEfilter:
+            filterLayout = QHBoxLayout()
+            self._layout.addLayout(filterLayout)
+            self._filterCBs = {}
+            for fe in ['DEV', 'CBRS', 'UHF']:
+                self._filterCBs[fe] = QCheckBox(fe, self)
+                self._filterCBs[fe].setChecked(True)
+                self._filterCBs[fe].stateChanged.connect(self._updateList)
+                filterLayout.addWidget(self._filterCBs[fe])
+            print(self._filterCBs)
         selectButton = QPushButton("Select Device(s)", self)
         selectButton.clicked.connect(self._handleSelectClicked) #lambda: self._handleListDoubleClicked(self._list.currentItem()))
         selectButton.setEnabled(False)
         self._selectButton = selectButton
         
-        self._list = QListWidget(self)
+        self._list = QListWidget(self)  #todo: perhaps make the options dynamic with available Irises on the network
         if multiDevice:
             self._list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._list.itemSelectionChanged.connect(lambda: selectButton.setEnabled(True))
@@ -63,7 +84,7 @@ class DeviceSelectionDialog(QDialog):
             self._timeCheckBox.setChecked(False)
 
         self.deviceListQueried.connect(self._handleDeviceListQueried)
-        self._knownDevices = list()
+        self._knownDevices = list()        
         self._deviceHandles = []
 
         self._thread = None
@@ -108,11 +129,27 @@ class DeviceSelectionDialog(QDialog):
 
     def _handleDeviceListQueried(self, devices):
         if devices == self._knownDevices: return
-        #reload the 
-        self._selectButton.setEnabled(False)
-        self._list.clear()
         self._knownDevices = devices
-        for device in self._knownDevices: self._list.addItem(device['label'])
+        self._updateList()
+        
+    def _updateList(self):
+        #reload the new devices
+        
+        devices = []
+        if self._FEfilter:  #filter device list -- there is probably a cleaner/faster way to do this
+            showDevs = []
+            for k,v in self._filterCBs.items():  
+                if v.isChecked(): showDevs.append(k)
+            for d in self._knownDevices:
+                for s in showDevs:
+                    if s in d['frontend']:
+                        devices.append(d)
+        else:
+            devices = self._knownDevices
+            
+        self._selectButton.setEnabled(False) #the clear clears the selection(s)            
+        self._list.clear()
+        for device in devices: self._list.addItem(device['label'])
         #todo reselect devices
 
     def _handleListDoubleClicked(self, item):

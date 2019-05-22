@@ -13,7 +13,6 @@
 #	(c) info@skylarkwireless.com 2019
 #
 #   TODO: Add a selection pane for selecting which Iris to readback from.
-#       Confirm all devices have same FE. (perhaps filter list in device selection)
 
 ########################################################################
 ## Main window
@@ -464,7 +463,7 @@ if __name__ == '__main__':
     settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "IrisControlGUI")
 
     if not handles:
-        dialog = DeviceSelectionDialog(settings=settings, multiDevice=True)
+        dialog = DeviceSelectionDialog(settings=settings, multiDevice=True, FEfilter=True)
         dialog.exec()
         handles = dialog.devicesHandle()
     #else:
