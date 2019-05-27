@@ -16,6 +16,7 @@
 ########################################################################
 from PyQt5.QtWidgets import QDialog
 from PyQt5.QtWidgets import QListWidget
+from PyQt5.QtWidgets import QListWidgetItem
 from PyQt5.QtWidgets import QAbstractItemView
 from PyQt5.QtWidgets import QGroupBox
 from PyQt5.QtWidgets import QVBoxLayout
@@ -56,9 +57,8 @@ class DeviceSelectionDialog(QDialog):
                 self._filterCBs[fe].setChecked(True)
                 self._filterCBs[fe].stateChanged.connect(self._updateList)
                 filterLayout.addWidget(self._filterCBs[fe])
-            print(self._filterCBs)
         selectButton = QPushButton("Select Device(s)", self)
-        selectButton.clicked.connect(self._handleSelectClicked) #lambda: self._handleListDoubleClicked(self._list.currentItem()))
+        selectButton.clicked.connect(self._handleSelectClicked)
         selectButton.setEnabled(False)
         self._selectButton = selectButton
         
@@ -149,22 +149,30 @@ class DeviceSelectionDialog(QDialog):
             
         self._selectButton.setEnabled(False) #the clear clears the selection(s)            
         self._list.clear()
-        for device in devices: self._list.addItem(device['label'])
+        for device in devices: 
+            i = QListWidgetItem(device['label'])
+            i.device = device
+            self._list.addItem(i)
         #todo reselect devices
 
     def _handleListDoubleClicked(self, item):
-        row = self._list.row(item)
-        args = [self._knownDevices[row]]
+        #row = self._list.row(item)
+        #args = [self._knownDevices[row]]
+        args = [item.device]
         self._deviceHandles = args
         self.devicesSelected.emit(args if self._multiDevice else args[0])
         self.accept()
 
     def _handleSelectClicked(self):
         rows = self._list.selectedItems()
-        args = [self._knownDevices[self._list.row(row)] for row in rows]
+        args = [row.device for row in rows]
+        #args = [self._knownDevices[self._list.row(row)] for row in rows]
         self._deviceHandles = args
-        self.devicesSelected.emit(args if self._multiDevice else args[0])
-        self.accept()
+        if len(args) > 0:
+            self.devicesSelected.emit(args if self._multiDevice else args[0])
+            self.accept()
+        else:
+            self._selectButton.setEnabled(False) 
 
     def _handleUpdateTimeout(self):
         if self._thread is not None and self._thread.isAlive(): return

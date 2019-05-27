@@ -12,7 +12,8 @@
 #
 #	(c) info@skylarkwireless.com 2019
 #
-#   TODO: Add a selection pane for selecting which Iris to readback from.
+#   TODO: Fix bug where only some values are written back when switching readback Irises or
+#         switching panes (only some widgets call their setters)
 
 ########################################################################
 ## Main window
@@ -49,9 +50,9 @@ class MainWindow(QMainWindow):
         #start the window
         self._controlTabs = QTabWidget(self)
         self.setCentralWidget(self._controlTabs)
-        self._mainTab = HighLevelControlTab(irises, [0, 1], self.setIris, self._controlTabs)
-        self._controlTabs.addTab(self._mainTab, "Main")
         self._tabs = {}
+        self._mainTab = HighLevelControlTab(irises, [0, 1], self.setReadIris, self.setWriteIrises, self._controlTabs)
+        self._controlTabs.addTab(self._mainTab, "Main")
         for name, chans, start, stop in [
             ('LML', [0,], 0x0000, 0x002F),
             ('TxTSP', [0, 1], 0x0200, 0x020C),
@@ -86,9 +87,12 @@ class MainWindow(QMainWindow):
     def loadFile(self, filePath):
         self._mainTab.loadFile(filePath)
 
-    def setIris(self, iris):
+    def setReadIris(self, iris):
         for k,tab in self._tabs.items():
             tab._iris = iris #lazy, not implementing setter
+    def setWriteIrises(self, irises):
+        for k,tab in self._tabs.items():
+            tab._writeIrises = irises #lazy, not implementing setter
 
     def closeEvent(self, event):
 
@@ -187,6 +191,7 @@ class LowLevelControlTab(QWidget):
         layout = QHBoxLayout(self)
         self._iris = irises[0]
         self._irises = irises
+        self._writeIrises = irises
         self._chans = chans
         self._start = start
         self._stop = stop
@@ -233,7 +238,7 @@ class LowLevelControlTab(QWidget):
 
     def showEvent(self, e):
         for ch in self._chans:
-            LowLevelControlTab.setChannel(self._irises, ch)
+            LowLevelControlTab.setChannel(self._writeIrises, ch)
             values = self._iris.readRegisters('LMS7IC', self._start, 1+self._stop-self._start)
             for key, param_addr, bit_start, bit_stop, default, name, desc in PARAMS:
                 if (key, ch) not in self._editWidgets: continue
@@ -258,6 +263,7 @@ from PyQt5.QtWidgets import QPushButton
 #from PyQt5.QtWidgets import QHBoxLayout
 from PyQt5.QtWidgets import QFileDialog
 from PyQt5.QtWidgets import QRadioButton
+from PyQt5.QtWidgets import QLabel
 from SoapySDR import *
 from sklk_widgets import FreqEntryWidget
 from sklk_widgets import ArbitrarySettingsWidget
@@ -266,13 +272,15 @@ import functools
 import json
 
 class HighLevelControlTab(QWidget):
-    def __init__(self, irises, chans, setIrisCallback, parent = None):
+    def __init__(self, irises, chans, setReadIrisCallback, setWriteIrisesCallback, parent = None):
         QWidget.__init__(self, parent)
         layout = QGridLayout(self)
-        self._setIrisCallback = setIrisCallback
+        self._setReadIrisCallback = setReadIrisCallback
+        self._setWriteIrisesCallback = setWriteIrisesCallback
         self._editWidgets = list()
         self._iris = irises[0]
         self._irises = irises
+        self._writeIrises = irises
         self._txReplayWaveform = ""
 
         #global configuration parameters
@@ -280,9 +288,9 @@ class HighLevelControlTab(QWidget):
         layout.addWidget(groupBox, 0, 0, 2, 1)
         formLayout = QFormLayout(groupBox)
         for name, widgetType, setter, getter in (
-            ("Rx Frequency", FreqEntryWidget, lambda f: [[iris.setFrequency(SOAPY_SDR_RX, ch, "RF", f) for ch in [0, 1] for iris in irises]], functools.partial(self._iris.getFrequency, SOAPY_SDR_RX, 0, "RF")),
-            ("Tx Frequency", FreqEntryWidget, lambda f: [[iris.setFrequency(SOAPY_SDR_TX, ch, "RF", f) for ch in [0, 1] for iris in irises]], functools.partial(self._iris.getFrequency, SOAPY_SDR_TX, 0, "RF")),
-            ("Sample Rate", FreqEntryWidget, lambda r: [[iris.setSampleRate(d, 0, r) for d in (SOAPY_SDR_RX, SOAPY_SDR_TX) for iris in irises]], functools.partial(self._iris.getSampleRate, SOAPY_SDR_RX, 0)),
+            ("Rx Frequency", FreqEntryWidget, lambda f: [[iris.setFrequency(SOAPY_SDR_RX, ch, "RF", f) for ch in [0, 1] for iris in irises]], lambda: self._iris.getFrequency(SOAPY_SDR_RX, 0, "RF")), #functools.partial(self._iris.getFrequency, SOAPY_SDR_RX, 0, "RF")),
+            ("Tx Frequency", FreqEntryWidget, lambda f: [[iris.setFrequency(SOAPY_SDR_TX, ch, "RF", f) for ch in [0, 1] for iris in irises]], lambda: self._iris.getFrequency(SOAPY_SDR_TX, 0, "RF")),
+            ("Sample Rate", FreqEntryWidget, lambda r: [[iris.setSampleRate(d, 0, r) for d in (SOAPY_SDR_RX, SOAPY_SDR_TX) for iris in irises]], lambda: self._iris.getSampleRate(SOAPY_SDR_RX, 0)),
         ):
             edit = FreqEntryWidget(groupBox)
             formLayout.addRow(name, edit)
@@ -290,15 +298,27 @@ class HighLevelControlTab(QWidget):
         self.loadArbitrarySettings(groupBox, formLayout)
 
         if len(irises) > 1:
-            irisGroupBox = QGroupBox("Iris Readback Select (Experimental!)", self)
+            irisGroupBox = QGroupBox("Iris Read/Write Select (Experimental!)", self)
             layout.addWidget(irisGroupBox, 2, 0, 1, 3, Qt.AlignHCenter)
-            irisRadioLayout = QHBoxLayout(irisGroupBox)
+            irisLayout = QFormLayout(irisGroupBox)
+            irisReadRadioLayout = QHBoxLayout(irisGroupBox)
+            irisLayout.addRow(irisReadRadioLayout)
+            irisReadRadioLayout.addWidget(QLabel("Readback:"))            
             self._irisRadioButtons = [QRadioButton(iris.getHardwareInfo()['serial'], irisGroupBox) for iris in irises]
             #for i,r in (irises,self._irisRadioButtons): r.iris = i
             self._irisRadioButtons[0].setChecked(True)
             for i,r in zip(irises,self._irisRadioButtons): 
-                irisRadioLayout.addWidget(r)
-                r.toggled.connect(functools.partial(self.setIris, i))
+                irisReadRadioLayout.addWidget(r)
+                r.toggled.connect(functools.partial(self.setReadIris, i))
+            irisWriteCheckBoxLayout = QHBoxLayout(irisGroupBox)
+            irisWriteCheckBoxLayout.addWidget(QLabel("Write:"))
+            irisLayout.addRow(irisWriteCheckBoxLayout)
+            self._irisWriteCheckButtons = [QCheckBox(iris.getHardwareInfo()['serial'], irisGroupBox) for iris in irises]
+            for i,r in zip(irises,self._irisWriteCheckButtons): 
+                r.iris = i
+                irisWriteCheckBoxLayout.addWidget(r)
+                r.setChecked(True)
+                r.toggled.connect(self.setWriteIrises)
 
         info = SoapySDR.ArgInfo()
         info.type = info.STRING
@@ -326,18 +346,26 @@ class HighLevelControlTab(QWidget):
                 layout.addWidget(groupBox, 0 if direction == SOAPY_SDR_RX else 1, ch+1, 1, 1)
                 self.loadChannelSettings(groupBox, direction, ch)
     
-    def setIris(self, iris, checked):
-        print("Iris %s selected for readback." % iris.getHardwareInfo()['serial'])
+    def setReadIris(self, iris, checked):
         if checked:
+            print("Iris %s selected for readback." % iris.getHardwareInfo()['serial'])
             self._iris = iris
-            self._setIrisCallback(iris)
+            self._setReadIrisCallback(iris)
+            self.setWriteIrises(self._irisWriteCheckButtons) #this is done to make sure the read Iris is selected for write.
             self.showEvent(None) #reload the values
+
+    def setWriteIrises(self, checked):
+        self._writeIrises = [b.iris for b in self._irisWriteCheckButtons if b.isChecked() or b.iris is self._iris]
+        [b.setChecked(True) for b in self._irisWriteCheckButtons if b.iris is self._iris]
+        self._setWriteIrisesCallback(self._writeIrises)
+            
+    def getIris(self): return self._iris
             
     def setupTxReplay(self, name):
         self._txReplayWaveform = name
 
         #empty string to disable
-        if not name: return [iris.writeSetting("TX_REPLAY", "") for iris in self._irises][0]
+        if not name: return [iris.writeSetting("TX_REPLAY", "") for iris in self._writeIrises][0]
 
         if name == "LTS":
             import lts
@@ -352,17 +380,17 @@ class HighLevelControlTab(QWidget):
             return np.bitwise_or(arr_q ,np.left_shift(arr_i.astype(np.uint32), 16))
 
         samps = cfloat2uint32(samps)
-        for iris in self._irises: iris.writeRegisters('TX_RAM_A', 0, cfloat2uint32(samps).tolist())
-        for iris in self._irises: iris.writeRegisters('TX_RAM_B', 0, cfloat2uint32(samps).tolist())
-        for iris in self._irises: iris.writeSetting("TX_REPLAY", str(len(samps)))
+        for iris in self._writeIrises: iris.writeRegisters('TX_RAM_A', 0, cfloat2uint32(samps).tolist())
+        for iris in self._writeIrises: iris.writeRegisters('TX_RAM_B', 0, cfloat2uint32(samps).tolist())
+        for iris in self._writeIrises: iris.writeSetting("TX_REPLAY", str(len(samps)))
 
     def loadChannelSettings(self, parent, direction, ch):
         hbox = QHBoxLayout(parent)
         formLayout = QFormLayout()
         hbox.addLayout(formLayout)
         factories = [
-            ("NCO Frequency", FreqEntryWidget, functools.partial(listFuncHelper, [iris.setFrequency for iris in self._irises], direction, ch, "BB"), functools.partial(self._iris.getFrequency, direction, ch, "BB")),
-            ("Filter BW", FreqEntryWidget, functools.partial(listFuncHelper, [iris.setBandwidth for iris in self._irises], direction, ch), functools.partial(self._iris.getBandwidth, direction, ch)),
+            ("NCO Frequency", FreqEntryWidget, functools.partial(listFuncHelper, [iris.setFrequency for iris in self._writeIrises], direction, ch, "BB"), lambda direction=direction, ch=ch: self._iris.getFrequency(direction, ch, "BB")), #functools.partial(self._iris.getFrequency, direction, ch, "BB")), # use this syntax to make direction and ch to persist, but execute self._iris when called (for switching iris readback): https://stackoverflow.com/questions/11087047/deferred-evaluation-with-lambda-in-python/11087323
+            ("Filter BW", FreqEntryWidget, functools.partial(listFuncHelper, [iris.setBandwidth for iris in self._writeIrises], direction, ch), lambda direction=direction, ch=ch: self._iris.getBandwidth(direction, ch)),
         ]
         for name, widgetType, setter, getter in factories:
             edit = FreqEntryWidget(parent)
@@ -372,8 +400,8 @@ class HighLevelControlTab(QWidget):
             edit = QDoubleSpinBox(parent)
             formLayout.addRow(name, edit)
             self.loadEditWidget(edit,
-                functools.partial(listFuncHelper, [iris.setGain for iris in self._irises], direction, ch, name),
-                functools.partial(self._iris.getGain, direction, ch, name),
+                functools.partial(listFuncHelper, [iris.setGain for iris in self._writeIrises], direction, ch, name),
+                lambda direction=direction, ch=ch, name=name: self._iris.getGain(direction, ch, name),
                 [direction, ch, name])
             r = self._iris.getGainRange(direction, ch, name)
             edit.setRange(r.minimum(), r.maximum())
@@ -384,8 +412,8 @@ class HighLevelControlTab(QWidget):
         edit = StringValueComboBox(options=self._iris.listAntennas(direction, ch), parent=parent)
         formLayout.addRow("Antenna", edit)
         self.loadEditWidget(edit,
-            functools.partial(listFuncHelper, [iris.setAntenna for iris in self._irises], direction, ch),
-            functools.partial(self._iris.getAntenna, direction, ch),
+            functools.partial(listFuncHelper, [iris.setAntenna for iris in self._writeIrises], direction, ch),
+            lambda direction=direction, ch=ch: self._iris.getAntenna(direction, ch),
             [direction, ch, 'Antenna'])
         self.loadArbitrarySettings(parent, formLayout, [direction, ch])
         if self._iris.hasDCOffsetMode(direction, ch):
@@ -394,14 +422,14 @@ class HighLevelControlTab(QWidget):
             edit = ArbitrarySettingsWidget(info, self)
             formLayout.addRow("DC Removal", edit)
             self.loadEditWidget(edit,
-                lambda v: [iris.setDCOffsetMode(direction, ch, v == "true") for iris in self._irises], #this is a lambda in IrisControlGui, but maybe it's messing things up?
+                lambda v: [iris.setDCOffsetMode(direction, ch, v == "true") for iris in self._writeIrises], #this is a lambda in IrisControlGui, but maybe it's messing things up?
                 lambda: "true" if self._iris.getDCOffsetMode(direction, ch) else "false",
                 [direction, ch, 'DC Removal'])
         sklkCalButton = QPushButton("SKLK Calibrate", parent)
-        sklkCalButton.pressed.connect(functools.partial(listFuncHelper, [iris.writeSetting for iris in self._irises], direction, ch, "CALIBRATE", "SKLK"))
+        sklkCalButton.pressed.connect(functools.partial(listFuncHelper, [iris.writeSetting for iris in self._writeIrises], direction, ch, "CALIBRATE", "SKLK"))
         formLayout.addRow("Self Calibrate", sklkCalButton)
         mcuCalButton = QPushButton("MCU Calibrate", parent)
-        mcuCalButton.pressed.connect(functools.partial(listFuncHelper, [iris.writeSetting for iris in self._irises], direction, ch, "CALIBRATE", ""))
+        mcuCalButton.pressed.connect(functools.partial(listFuncHelper, [iris.writeSetting for iris in self._writeIrises], direction, ch, "CALIBRATE", ""))
         formLayout.addRow("Self Calibrate", mcuCalButton)
 
     def loadArbitrarySettings(self, parent, formLayout, prefixArgs=[]):
@@ -412,8 +440,8 @@ class HighLevelControlTab(QWidget):
             edit = ArbitrarySettingsWidget(info, parent)
             formLayout.addRow(info.name, edit)
             self.loadEditWidget(edit,
-                functools.partial(listFuncHelper, [iris.writeSetting for iris in self._irises], *(prefixArgs+[info.key])), #lambda v: [iris.writeSetting(*(prefixArgs+[info.key]), v) for iris in self._irises],  #for some reason this is passing "NONE" to RBB_SET_PATH which is not valid.  Not sure why it doesn't complain in the IrisControlGui.py
-                functools.partial(self._iris.readSetting, *(prefixArgs+[info.key])),
+                functools.partial(listFuncHelper, [iris.writeSetting for iris in self._writeIrises], *(prefixArgs+[info.key])), #lambda v: [iris.writeSetting(*(prefixArgs+[info.key]), v) for iris in self._writeIrises],  #for some reason this is passing "NONE" to RBB_SET_PATH which is not valid.  Not sure why it doesn't complain in the IrisControlGui.py
+                lambda prefixArgs=prefixArgs, key=info.key: self._iris.readSetting(*(prefixArgs+[key])),
                 prefixArgs + [info.name])
 
     def loadEditWidget(self, edit, setter, getter, args):
@@ -439,7 +467,7 @@ class HighLevelControlTab(QWidget):
             else: config['tx' if args[0] == SOAPY_SDR_TX else 'rx'][args[1]][args[2]] = getter()
         r20 = self._iris.readRegister('LMS7IC', 0x0020) & ~0x3
         for ch in [0, 1]:
-            for iris in self._irises: iris.writeRegister('LMS7IC', 0x0020, r20 | (ch+1))
+            for iris in self._writeIrises: iris.writeRegister('LMS7IC', 0x0020, r20 | (ch+1))
             for addr in ADDRS:
                 if ch == 1 and addr < 0x0100: continue
                 value = iris.readRegister('LMS7IC', addr)
@@ -456,9 +484,9 @@ class HighLevelControlTab(QWidget):
         config = json.loads(open(fname).read())
         r20 = self._iris.readRegister('LMS7IC', 0x0020) & ~0x3
         for ch in [0, 1]:
-            for iris in self._irises: iris.writeRegister('LMS7IC', 0x0020, r20 | (ch+1))
+            for iris in self._writeIrises: iris.writeRegister('LMS7IC', 0x0020, r20 | (ch+1))
             for addr, value in config['regs'][ch].items():
-                    for iris in self._irises: iris.writeRegister('LMS7IC', int(addr, 16), int(value, 16))
+                    for iris in self._writeIrises: iris.writeRegister('LMS7IC', int(addr, 16), int(value, 16))
         for edit, setter, getter, args in self._editWidgets:
             try:
                 if len(args) == 1: setter(config['global'][args[0]])
