@@ -510,29 +510,29 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--args", help="Device arguments (or none for selection dialog)")
     parser.add_argument("--file", help="Load saved config when specified")
+    parser.add_argument("--serials", type=str, dest="serials", help="SDR Serial Numbers, e.g. 00002 00004", default=None)
     args = parser.parse_args()
-    handles = args.args
 
     settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "Skylark", "IrisControlGUI")
 
-    if not handles:
+    if args.serials is None:
         dialog = DeviceSelectionDialog(settings=settings, multiDevice=True, FEfilter=True)
         dialog.exec()
         handles = dialog.devicesHandle()
-    #else:
-    #    handles = SoapySDR.Device.enumerate(handles)[0]
+    else:
+        handles = [dict(serial=s) for s in args.serials.split()]
     if len(handles) < 1:
         print('No device selected!')
         sys.exit(-1)
 
-    irises = [SoapySDR.Device(handle) for handle in handles]
+    print(handles)
+    irises = SoapySDR.Device(handles)
 
     #check all Irises are the same (at least same FE)
     fes = [iris.getHardwareInfo()["frontend"] for iris in irises]
     if any([fe != fes[0] for fe in fes]):
         print("Not all frontends match! Expected: %s" % fes[0])
         sys.exit(-1)
-        
 
     w = MainWindow(irises=irises, settings=settings, handles=handles)
     w.show()

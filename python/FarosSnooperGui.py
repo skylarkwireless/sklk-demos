@@ -93,16 +93,14 @@ class PlotterWidgets(QWidget):
         self._rxGain = [[0,0] for handle in handles]
         self._txGain = [[0,0] for handle in handles]
         self._devices = [SoapySDR.Device(handle) for handle in handles]
-        
-         
-        
+
         #figs = [Figure(figsize=(width, height), dpi=dpi) for d in self._devices]
         fig = Figure(figsize=(width, height), dpi=dpi)
         ndev = len(self._devices)
         ntime = len(chans) if showTime else 0
         ncols = np.ceil(ndev*(ntime+1) / 3) if ndev*(ntime+1) < 12 else ndev*(ntime+1) // 4
         nrows = (ntime+1)*np.ceil(ndev/ncols)
-        
+
         self._axFreq = [None for d in range(ndev)]
         self._axTime = [None for d in range(ndev)]
         for d in range(ndev):
@@ -167,10 +165,10 @@ class PlotterWidgets(QWidget):
                 ax.grid(True)
 
         if self._axTime[device]: self._axTime[device][-1].set_xlabel('Time (ms)', fontsize=fontsize)
-        
+
         with self._drawMutex:
             if time.time() - self._lastDraw > .05:
-                self._figure.draw() 
+                self._figure.draw()
                 self._lastDraw = time.time()
 
     def _snoopChannels(self, device):
@@ -205,7 +203,6 @@ class PlotterWidgets(QWidget):
             self.snooperComplete.emit(sampleses, device)
             while self._dataInFlight[device] and self._running:
                 time.sleep(.05)
-                
 
 ########################################################################
 ## Invoke the application
@@ -223,8 +220,8 @@ if __name__ == '__main__':
     parser.add_argument("--args", help="Device arguments (or none for selection dialog)")
     parser.add_argument("--time", help="Display time domain plots", action='store_true')
     parser.add_argument("--chans", help="Which channels A, B, or AB", default="AB")
+    parser.add_argument("--serials", type=str, dest="serials", help="SDR Serial Numbers, e.g. 00002 00004", default=None)
     args = parser.parse_args()
-    handles = args.args
     showTime = args.time
     chans = args.chans
 
@@ -233,14 +230,14 @@ if __name__ == '__main__':
 
     handles = []
     #pick a device to open
-    if not handles:
+    if args.serials is None:
         dialog = DeviceSelectionDialog(channelSelect=True, timeSelect=True, settings=settings, multiDevice=True, FEfilter=True)
         dialog.exec()
         handles = dialog.devicesHandle()
         showTime = dialog.showTime()
         chans = dialog.channels()
-    #else:
-    #    handles = SoapySDR.Device.enumerate(handles) #todo
+    else:
+        handles = [dict(serial=s,label=s) for s in args.serials.split()]
     if len(handles) < 1:
         print('No device selected!')
         sys.exit(-1)
