@@ -455,7 +455,7 @@ if __name__ == '__main__':
         handle = SoapySDR.Device.enumerate(handle)[0]
     if not handle:
         print('No device selected!')
-        exit(-1)
+        sys.exit(-1)
 
     iris = SoapySDR.Device(handle)
 

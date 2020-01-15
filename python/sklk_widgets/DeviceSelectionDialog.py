@@ -52,7 +52,7 @@ class DeviceSelectionDialog(QDialog):
             filterLayout = QHBoxLayout()
             self._layout.addLayout(filterLayout)
             self._filterCBs = {}
-            for fe in ['DEV', 'CBRS', 'UHF']:
+            for fe in ['DEV', 'CBRS', 'UHF', 'Other']:
                 self._filterCBs[fe] = QCheckBox(fe, self)
                 self._filterCBs[fe].setChecked(True)
                 self._filterCBs[fe].stateChanged.connect(self._updateList)
@@ -105,7 +105,7 @@ class DeviceSelectionDialog(QDialog):
 
     def devicesHandle(self): return self._deviceHandles
     
-    def deviceHandle(self): return self._deviceHandles[0]
+    def deviceHandle(self): return self._deviceHandles[0] if len(self._deviceHandles) > 0 else None
 
     def showTime(self): return self._timeCheckBox.isChecked()
 
@@ -141,9 +141,13 @@ class DeviceSelectionDialog(QDialog):
             for k,v in self._filterCBs.items():  
                 if v.isChecked(): showDevs.append(k)
             for d in self._knownDevices:
-                for s in showDevs:
-                    if s in d['frontend']:
-                        devices.append(d)
+                if 'frontend' in d:
+                    for s in showDevs:
+                            if s in d['frontend']:
+                                devices.append(d)
+                elif 'Other' in showDevs:
+                     devices.append(d)
+
         else:
             devices = self._knownDevices
             
