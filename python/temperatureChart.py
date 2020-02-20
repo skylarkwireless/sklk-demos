@@ -163,13 +163,16 @@ class TemperatureChart(object):
 
         range_temp = {}
         for sensor_name in self.sensor_names:
-            range_temp[sensor_name] = self.max_temp[sensor_name] - self.min_temp[sensor_name]
+            if sensor_name in self.max_temp and sensor_name in self.min_temp:
+                range_temp[sensor_name] = "{:4.1f}".format(self.max_temp[sensor_name] - self.min_temp[sensor_name])
+            else:
+                range_temp[sensor_name] = ""
 
         for serial in self.serials:
             self.printRow(sensors_by_node[serial])
 
         print()
-        print (format_str.format("", "Range", *["{:4.1f}".format(range_temp[sensor_name]) for sensor_name in self.sensor_names]))
+        print (format_str.format("", "Range", *[range_temp[sensor_name] for sensor_name in self.sensor_names]))
 
     @classmethod
     def run(cls, args):
