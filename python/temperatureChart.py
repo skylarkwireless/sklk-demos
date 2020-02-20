@@ -97,11 +97,12 @@ class TemperatureChart(object):
         :param sdr: the iris node
         :return: a dictionary containing sensor information for the iris
         '''
-        sensors = sdr.listSensors()
+        sensors = sdr.listSensors() if sdr else {}
         sensor_table = {
             'serial': serial,
             'idx': self.serials.index(serial)+1
         }
+
         for sensor_name in sensors:
             value = json.loads(sdr.readSensor(sensor_name))
             sensor_table[sensor_name] = value
@@ -112,8 +113,8 @@ class TemperatureChart(object):
 
     def convertSensorToBar(self, sensor_name, sensor):
         'Uses the dynamic and static ranges to calculate a bar graph'
-        _min_temp = self.min_display_temp.get(sensor_name, self.min_temp[sensor_name])
-        _max_temp = self.max_display_temp.get(sensor_name, self.max_temp[sensor_name])
+        _min_temp = min(self.min_display_temp.get(sensor_name, self.min_temp[sensor_name]), self.min_temp[sensor_name])
+        _max_temp = max(self.max_display_temp.get(sensor_name, self.max_temp[sensor_name]), self.max_temp[sensor_name])
         temp = int((sensor - _min_temp) / max(_max_temp - _min_temp, 1) * self.MAX_BARS + 1)
         return '|' * temp
 
@@ -123,7 +124,13 @@ class TemperatureChart(object):
 
     def getSdrs(self):
         'Get a list of devices based on serials'
-        return dict(zip(self.serials, SoapySDR.Device([dict(driver='iris', serial=serial, timeout="1000000") for serial in self.serials])))
+        sdrs = {}
+        for serial in self.serials:
+            try:
+                sdrs[serial] = SoapySDR.Device(dict(driver='iris', serial=serial, timeout="1000000"))
+            except RuntimeError:
+                sdrs[serial] = None
+        return sdrs
 
     def _getSensors(self) -> dict:
         sdrs = self.getSdrs()
@@ -184,7 +191,7 @@ class TemperatureChart(object):
                 argname = cls.argNameFromSensor(range_str, sensor_name)
                 parser.add_argument(argname, help="Set a {} {} temperature".format(name, component), action="store", default=None, type=float, metavar='TEMP')
 
-        parser.add_argument('serials', nargs='*', help="List of serial numbers")
+        parser.add_argument('serials', nargs='+', help="List of serial numbers")
         args = parser.parse_args(argv)
 
         try:
