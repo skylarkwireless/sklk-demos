@@ -239,7 +239,7 @@ if __name__ == '__main__':
 	)
 	
 	#Generate signal to send
-	nsamps = 78000*2
+	nsamps = 4096
 	nsamps_pad = 100
 	s_freq = 500e3
 	Ts = 1/siso_sdr.rate
