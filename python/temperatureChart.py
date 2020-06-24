@@ -97,14 +97,24 @@ class TemperatureChart(object):
         :param sdr: the iris node
         :return: a dictionary containing sensor information for the iris
         '''
-        sensors = sdr.listSensors() if sdr else {}
+        try:
+            sensors = sdr.listSensors() if sdr else []
+        except RuntimeError:
+            sensors = []
+
         sensor_table = {
             'serial': serial,
             'idx': self.serials.index(serial)+1
         }
 
         for sensor_name in sensors:
-            value = json.loads(sdr.readSensor(sensor_name))
+            try:
+                value = json.loads(sdr.readSensor(sensor_name))
+            except RuntimeError:
+                continue
+            if value == 0:
+                # Ignore any values of 0.  They are not being reported correctly
+                continue
             sensor_table[sensor_name] = value
             self.min_temp[sensor_name] = min(self.min_temp.setdefault(sensor_name, value), value)
             self.max_temp[sensor_name] = max(self.max_temp.setdefault(sensor_name, value), value)
