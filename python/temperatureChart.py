@@ -19,6 +19,7 @@ import SoapySDR
 import argparse
 import traceback
 import json
+import yaml
 
 STDERR_FILENO = 2
 
@@ -185,6 +186,29 @@ class TemperatureChart(object):
         print (format_str.format("", "Range", *[range_temp[sensor_name] for sensor_name in self.sensor_names]))
 
     @classmethod
+    def get_config_keys(cls):
+        config_key_search = ['serials', ]
+        for range_name in ['min', 'max']:
+            for sensor_name in cls.sensor_names:
+                config_key_search.append(cls.varNameFromSensor(range_name, sensor_name))
+        return config_key_search
+
+    @classmethod
+    def set_args_from_config (cls, args):
+        if args.config is None or not os.path.exists(args.config):
+            return
+
+        with open(args.config, "r+") as fptr:
+            config = yaml.load(fptr, Loader=yaml.FullLoader)
+
+        for key in cls.get_config_keys():
+            value = config.get(key, None)
+            if type(value) is list:
+                getattr(args, key).extend([x for x in value if type(x)==str])
+            elif type(value) in (str, int, float,):
+                setattr(args, key, value)
+
+    @classmethod
     def run(cls, args):
         chart = cls(args)
         rows = chart.getSensors()
@@ -204,8 +228,14 @@ class TemperatureChart(object):
                 argname = cls.argNameFromSensor(range_str, sensor_name)
                 parser.add_argument(argname, help="Set a {} {} temperature".format(name, component), action="store", default=None, type=float, metavar='TEMP')
 
-        parser.add_argument('serials', nargs='+', help="List of serial numbers")
+        parser.add_argument('--config', help="Specify a configuration file.  The following keys are supported: {}".
+                            format(cls.get_config_keys()), action="store", default=None)
+        parser.add_argument('serials', nargs='*', help="List of serial numbers", default=[])
         args = parser.parse_args(argv)
+        cls.set_args_from_config(args)
+        if (not args.serials):
+            print("Must specify a serial or config file with serials")
+            return -1
 
         try:
             cls.run(args)
