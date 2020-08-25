@@ -63,9 +63,13 @@ def ticksToTimeNs(ticks, rate):
 def timeNsToTicks(timeNs, rate):
     return timeNs*rate/1e9
 
-def clip(a,m=1):
+def clip(a, m=1, nbits=12):
     np.clip(a.real, -m, m, out=a.real)
     np.clip(a.imag, -m, m, out=a.imag)
+    if nbits is not None:
+        #quick way to simulate limited bit precision (and make rx gain important)
+        a.real[np.argwhere(np.abs(a.real) < 1/2**(nbits-1))] = 0 #highest bit is sign
+        a.imag[np.argwhere(np.abs(a.imag) < 1/2**(nbits-1))] = 0
     return a
 
 class Channel:
