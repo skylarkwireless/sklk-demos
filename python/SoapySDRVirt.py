@@ -63,13 +63,18 @@ def ticksToTimeNs(ticks, rate):
 def timeNsToTicks(timeNs, rate):
     return timeNs*rate/1e9
 
+def clip(a,m=1):
+    np.clip(a.real, -m, m, out=a.real)
+    np.clip(a.imag, -m, m, out=a.imag)
+    return a
+
 class Channel:
     ''' 
     A very basic multipath channel model with some number of taps over a delay spread, each with their own phase and attenuation.
     It implements various impairments including noise, CFO, delay, and DC offset.
     Parameters are static once instantiated.
     '''
-    def __init__(self, noise=0.01, phase_shift=True, attn=.5, attn_var=.1, delay=48, delay_var=2, dc=.02, cfo=.00005, delay_spread=5, num_taps=4, tap_attn=4):
+    def __init__(self, noise=-70, phase_shift=True, attn=-40, attn_var=5, delay=48, delay_var=2, dc=.05, cfo=.00005, delay_spread=5, num_taps=4, tap_attn=12):
     #def __init__(self, noise=0.0, phase_shift=False, attn=1, attn_var=0, delay=56, delay_var=0, dc=.01, cfo=.000, delay_spread=1, num_taps=1, tap_attn=4):
         #cfo in phase rotation per sample in radians
         if num_taps < 1:
@@ -89,8 +94,8 @@ class Channel:
         self.path_delays = [0]
         self.num_taps=num_taps
         for i in range(num_taps):
-            new_path = (attn + np.random.normal(scale=attn_var))
-            if i > 0: new_path /= i*tap_attn  #increasingly attenuate additional paths
+            new_path = 10**((attn + np.random.normal(scale=attn_var))/20)
+            if i > 0: new_path /= i*10**(tap_attn/20)  #increasingly attenuate additional paths
             if phase_shift: new_path *= np.exp(np.random.uniform(high=2*np.pi)*1j)
             self.paths.append(new_path)
             if i > 0: self.path_delays.append(np.random.randint(low=i,high=delay_spread+1)) #weird behavior, high never happens #could result in two of the same delays -- but that's ok
@@ -104,7 +109,7 @@ class Channel:
             out[self.delay+self.path_delays[i]:self.delay+self.path_delays[i]+samps.shape[0]] += samps_c*self.paths[i] #apply path phase shift, attenuation, and delay
         out *= self.genCFO(out.shape[0], self.cfo)  #apply cfo
         out += self.dc #apply dc #more physically accurate to do it for each path, but end result is just another constant dc offset
-        out += np.random.normal(scale=self.noise, size=out.shape[0])
+        out += np.random.normal(scale=10**(self.noise/20), size=out.shape[0]) + np.random.normal(scale=10**(self.noise/20), size=out.shape[0])*1.j
         return out[:samps.shape[0]]
 
     @staticmethod
@@ -145,6 +150,8 @@ class ChanEmu:
             cls._bufsize=bufsize
             cls._bufs = []
             cls._channels = [[Channel()]]
+            cls.tx_gains = []
+            cls.rx_gains = []
             #cls._buf = np.zeros(bufsize, dtype=np.complex64)
         return cls._instance
     
@@ -156,15 +163,18 @@ class ChanEmu:
             for c in cls._channels:
                 c.append(Channel())
             cls._channels.append([Channel() for i in range(len(cls._channels)+1)])
+        cls.tx_gains.append(0)
+        cls.rx_gains.append(0)
         
     def read(cls, num, chan_id):
         out = np.zeros(num,dtype=np.complex64)
         for i , (c,b) in enumerate(zip(cls._channels[chan_id],cls._bufs)):  #channelize and sum all buffers
             if i != chan_id: out += c.channelize(b[:num])  #assume you can't rx your own tx
-        return out
+        print(cls.rx_gains, cls.tx_gains)
+        return clip(out*10**(cls.rx_gains[chan_id]/20)) #clip after RX gain.  The rx gain doesn't do much in this sim, since it scales everything.  We may need to add another noise stage or quantization lower bound to be more realistic.
     
     def write(cls, vals, chan_id):
-        cls._bufs[chan_id][:vals.shape[0]] = vals
+        cls._bufs[chan_id][:vals.shape[0]] = clip(vals)*10**(cls.tx_gains[chan_id]/20) #clip before TX gain
         
     def write_old(cls, vals, noise=0.01, phase_shift=1, attn=.5, delay=50, dc=.01-.02j):
         '''TODO: add CFO, make device remember settings, and eventually have a centralized channel emulator.'''
@@ -189,11 +199,15 @@ class Device:
     '''
     
     _NEXT_CHAN = 0 #keep unique device identifiers for the channel emulation
+    _TX_GAIN_RANGE = [-50,50]
+    _RX_GAIN_RANGE = [-50,50]
     
     def __init__(self, *argv, num_chan=2):
         #to replicate this properly, we should be able to take a list of args in and return a list of devices.
         self.rate = None
         self.freq = None
+        #self.tx_gain = [0]*num_chan
+        #self.rx_gain = [0]*num_chan
         self.bandwidth = None
         self.chan_em = ChanEmu()
         self.num_chan = num_chan
@@ -218,10 +232,28 @@ class Device:
         return self.bandwidth
     def setBandwidth(self, direction, channel, bw):
          self.bandwidth = bw
-    def getGain(self, *argv, **kwargs):
-        return
-    def setGain(self, *argv, **kwargs):
-        return
+    def getGain(self, direction, channel, *argv, **kwargs):
+        if direction == SOAPY_SDR_TX:
+            return  self.chan_em.tx_gains[self.chan_ids[channel]]
+        if direction == SOAPY_SDR_RX:
+            return  self.chan_em.rx_gains[self.chan_ids[channel]]
+    def getGainRange(self, direction, channel, *argv, **kwargs):
+        if direction == SOAPY_SDR_TX:
+            return  self._TX_GAIN_RANGE
+        if direction == SOAPY_SDR_RX:
+            return  self._RX_GAIN_RANGE
+    def setGain(self, direction, channel, value, *argv, **kwargs):
+        #Note: we have the ChanEmu keep track of gains since there is a layer of indirection in the 
+        #Stream -- when we write stream, we actually don't know which channel is being written to, 
+        #so it is easier to consider the gain as part of the channel.
+        if direction == SOAPY_SDR_TX:
+            #value = np.clip(value, self._TX_GAIN_RANGE[0], self._TX_GAIN_RANGE[1])
+            #self.tx_gain[channel] = value
+            self.chan_em.tx_gains[self.chan_ids[channel]] = np.clip(value, self._TX_GAIN_RANGE[0], self._TX_GAIN_RANGE[1])
+        if direction == SOAPY_SDR_RX:
+            #value = np.clip(value, self._RX_GAIN_RANGE[0], self._RX_GAIN_RANGE[1])
+            #self.rx_gain[channel] = value
+            self.chan_em.rx_gains[self.chan_ids[channel]] = np.clip(value, self._RX_GAIN_RANGE[0], self._RX_GAIN_RANGE[1])
     def getFrequency(self, direction, channel, name='RF'):
         return self.freq
     def setFrequency(self, direction, channel, name, frequency):
@@ -303,8 +335,6 @@ class Device:
     def getFullDuplex(self, *argv, **kwargs):
         return
     def getGainMode(self, *argv, **kwargs):
-        return
-    def getGainRange(self, *argv, **kwargs):
         return
     def getHardwareKey(self, *argv, **kwargs):
         return
