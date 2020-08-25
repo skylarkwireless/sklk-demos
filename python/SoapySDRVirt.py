@@ -170,7 +170,6 @@ class ChanEmu:
         out = np.zeros(num,dtype=np.complex64)
         for i , (c,b) in enumerate(zip(cls._channels[chan_id],cls._bufs)):  #channelize and sum all buffers
             if i != chan_id: out += c.channelize(b[:num])  #assume you can't rx your own tx
-        print(cls.rx_gains, cls.tx_gains)
         return clip(out*10**(cls.rx_gains[chan_id]/20)) #clip after RX gain.  The rx gain doesn't do much in this sim, since it scales everything.  We may need to add another noise stage or quantization lower bound to be more realistic.
     
     def write(cls, vals, chan_id):
@@ -206,8 +205,6 @@ class Device:
         #to replicate this properly, we should be able to take a list of args in and return a list of devices.
         self.rate = None
         self.freq = None
-        #self.tx_gain = [0]*num_chan
-        #self.rx_gain = [0]*num_chan
         self.bandwidth = None
         self.chan_em = ChanEmu()
         self.num_chan = num_chan
@@ -247,12 +244,8 @@ class Device:
         #Stream -- when we write stream, we actually don't know which channel is being written to, 
         #so it is easier to consider the gain as part of the channel.
         if direction == SOAPY_SDR_TX:
-            #value = np.clip(value, self._TX_GAIN_RANGE[0], self._TX_GAIN_RANGE[1])
-            #self.tx_gain[channel] = value
             self.chan_em.tx_gains[self.chan_ids[channel]] = np.clip(value, self._TX_GAIN_RANGE[0], self._TX_GAIN_RANGE[1])
         if direction == SOAPY_SDR_RX:
-            #value = np.clip(value, self._RX_GAIN_RANGE[0], self._RX_GAIN_RANGE[1])
-            #self.rx_gain[channel] = value
             self.chan_em.rx_gains[self.chan_ids[channel]] = np.clip(value, self._RX_GAIN_RANGE[0], self._RX_GAIN_RANGE[1])
     def getFrequency(self, direction, channel, name='RF'):
         return self.freq
