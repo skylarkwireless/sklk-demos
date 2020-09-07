@@ -78,7 +78,7 @@ class Channel:
     It implements various impairments including noise, CFO, delay, and DC offset.
     Parameters are static once instantiated.
     '''
-    def __init__(self, noise=-70, phase_shift=True, attn=-40, attn_var=5, delay=48, delay_var=2, dc=.09, iq_imbal=.1, cfo=.00005, delay_spread=5, num_taps=4, tap_attn=12):
+    def __init__(self, noise=-70, phase_shift=True, attn=-40, attn_var=5, delay=48, delay_var=2, dc=.05, iq_imbal=.1, cfo=.00005, delay_spread=5, num_taps=4, tap_attn=12):
     #def __init__(self, noise=0.0, phase_shift=False, attn=1, attn_var=0, delay=56, delay_var=0, dc=.01, cfo=.000, delay_spread=1, num_taps=1, tap_attn=4):
         #cfo in phase rotation per sample in radians
         if num_taps < 1:
@@ -91,8 +91,10 @@ class Channel:
         self.delay_spread = delay_spread
         self.num_taps = num_taps
         if delay_var > 0: self.delay += np.random.randint(0,delay_var+1) #weird behavior, where delay_var=1 always returns 0
-        self.dc = 0 if dc > 0 else np.random.normal(scale=dc) + np.random.normal(scale=dc)*1j #randomize dc offset
-        self.iq_imbal = 1 if iq_imbal == 0 else 1 + np.random.normal(scale=iq_imbal) #randomize IQ imbalance
+        self.dc_rx = 0 if dc == 0 else np.random.normal(scale=dc) + np.random.normal(scale=dc)*1j #randomize dc offset
+        self.dc_tx = 0 if dc == 0 else np.random.normal(scale=dc) + np.random.normal(scale=dc)*1j #randomize dc offset
+        self.iq_imbal_tx = 1 if iq_imbal == 0 else 1 + np.random.normal(scale=iq_imbal) #randomize IQ imbalance
+        self.iq_imbal_rx = 1 if iq_imbal == 0 else 1 + np.random.normal(scale=iq_imbal) #randomize IQ imbalance
         self.noise = noise       
         self.cfo = cfo
         self.paths = []
@@ -112,9 +114,9 @@ class Channel:
         
         for i in range(self.num_taps):
             out[self.delay+self.path_delays[i]:self.delay+self.path_delays[i]+samps.shape[0]] += samps_c*self.paths[i] #apply path phase shift, attenuation, and delay
-        out *= self.genCFO(out.shape[0], self.cfo)  #apply cfo
-        out += self.dc #apply dc #more physically accurate to do it for each path, but end result is just another constant dc offset
-        out.real *= self.iq_imbal #apply iq imbalance -- we just do real, but it can be more or less than 1, so result is fine
+        out *= self.genCFO(out.shape[0], self.cfo)  #apply cfo #each device should have a different CFO!
+        out += self.dc_tx #apply dc #more physically accurate to do it for each path, but end result is just another constant dc offset
+        out.real *= self.iq_imbal_tx #apply iq imbalance -- we just do real, but it can be more or less than 1, so result is fine
         out += np.random.normal(scale=10**(self.noise/20), size=out.shape[0]) + np.random.normal(scale=10**(self.noise/20), size=out.shape[0])*1.j #add noise
         return out[:samps.shape[0]]
 
@@ -176,7 +178,10 @@ class ChanEmu:
         out = np.zeros(num,dtype=np.complex64)
         for i , (c,b) in enumerate(zip(cls._channels[chan_id],cls._bufs)):  #channelize and sum all buffers
             if i != chan_id: out += c.channelize(b[:num])  #assume you can't rx your own tx
-        return clip(out*10**(cls.rx_gains[chan_id]/20)) #clip after RX gain.  The rx gain doesn't do much in this sim, since it scales everything.  We may need to add another noise stage or quantization lower bound to be more realistic.
+        out *= 10**(cls.rx_gains[chan_id]/20) #apply rx gain
+        out.real *= cls._channels[chan_id][chan_id].iq_imbal_rx #apply iq imbalance -- we just do real, but it can be more or less than 1, so result is fine #apply here so that gains don't affect it.
+        out += cls._channels[chan_id][chan_id].dc_rx #apply dc #typically happens after amplification
+        return clip(out) #clip after RX gain.  The rx gain doesn't do much in this sim, since it scales everything.  We may need to add another noise stage or quantization lower bound to be more realistic.
     
     def write(cls, vals, chan_id):
         cls._bufs[chan_id][:vals.shape[0]] = clip(vals)*10**(cls.tx_gains[chan_id]/20) #clip before TX gain
