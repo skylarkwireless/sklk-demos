@@ -78,7 +78,7 @@ class Channel:
     It implements various impairments including noise, CFO, delay, and DC offset.
     Parameters are static once instantiated.
     '''
-    def __init__(self, noise=-70, phase_shift=True, attn=-40, attn_var=5, delay=48, delay_var=2, dc=.05, cfo=.00005, delay_spread=5, num_taps=4, tap_attn=12):
+    def __init__(self, noise=-70, phase_shift=True, attn=-40, attn_var=5, delay=48, delay_var=2, dc=.09, iq_imbal=.1, cfo=.00005, delay_spread=5, num_taps=4, tap_attn=12):
     #def __init__(self, noise=0.0, phase_shift=False, attn=1, attn_var=0, delay=56, delay_var=0, dc=.01, cfo=.000, delay_spread=1, num_taps=1, tap_attn=4):
         #cfo in phase rotation per sample in radians
         if num_taps < 1:
@@ -91,7 +91,8 @@ class Channel:
         self.delay_spread = delay_spread
         self.num_taps = num_taps
         if delay_var > 0: self.delay += np.random.randint(0,delay_var+1) #weird behavior, where delay_var=1 always returns 0
-        self.dc = 0 if dc > 0 else np.random.normal(scale=dc) + np.random.normal(scale=dc)*1j
+        self.dc = 0 if dc > 0 else np.random.normal(scale=dc) + np.random.normal(scale=dc)*1j #randomize dc offset
+        self.iq_imbal = 1 if iq_imbal == 0 else 1 + np.random.normal(scale=iq_imbal) #randomize IQ imbalance
         self.noise = noise       
         self.cfo = cfo
         self.paths = []
@@ -113,7 +114,8 @@ class Channel:
             out[self.delay+self.path_delays[i]:self.delay+self.path_delays[i]+samps.shape[0]] += samps_c*self.paths[i] #apply path phase shift, attenuation, and delay
         out *= self.genCFO(out.shape[0], self.cfo)  #apply cfo
         out += self.dc #apply dc #more physically accurate to do it for each path, but end result is just another constant dc offset
-        out += np.random.normal(scale=10**(self.noise/20), size=out.shape[0]) + np.random.normal(scale=10**(self.noise/20), size=out.shape[0])*1.j
+        out.real *= self.iq_imbal #apply iq imbalance -- we just do real, but it can be more or less than 1, so result is fine
+        out += np.random.normal(scale=10**(self.noise/20), size=out.shape[0]) + np.random.normal(scale=10**(self.noise/20), size=out.shape[0])*1.j #add noise
         return out[:samps.shape[0]]
 
     @staticmethod
@@ -178,13 +180,6 @@ class ChanEmu:
     
     def write(cls, vals, chan_id):
         cls._bufs[chan_id][:vals.shape[0]] = clip(vals)*10**(cls.tx_gains[chan_id]/20) #clip before TX gain
-        
-    def write_old(cls, vals, noise=0.01, phase_shift=1, attn=.5, delay=50, dc=.01-.02j):
-        '''TODO: add CFO, make device remember settings, and eventually have a centralized channel emulator.'''
-        cls._buf[delay:delay+vals.shape[0]] += vals*np.exp(phase_shift*1j)*attn+dc
-        if noise > 0:
-            cls._buf[delay:delay+vals.shape[0]] += np.random.normal(scale=noise, size=vals.shape[0])
-        #return vals.shape[0]
         
     def reset(cls):
         for buf in cls._bufs:
