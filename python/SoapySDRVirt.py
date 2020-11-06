@@ -217,11 +217,11 @@ class Device:
         Device._NEXT_CHAN += num_chan #this will increment the chan_ids for the next instance
         for i in range(num_chan): self.chan_em.add_chan() #add these channels to the channel emulator
         self.serial = argv[0]['serial'] + '-SIM' if 'serial' in argv[0] else 'NoSerial-SIM'
-        self.hw_info = { 'driver' : '2020.03.0.1-f0f0f0',
-                         'firmware' : '2020.03.0.1-f0f0f0',
-                         'fpga' : '2020.03.0.1-f0f0f0',
+        self.hw_info = { 'driver' : '2020.11.0.1-f0f0f0',
+                         'firmware' : '2020.11.0.1-f0f0f0',
+                         'fpga' : '2020.11.0.1-f0f0f0',
                          'frontend' : 'SIM',
-                         'revision' : 'Simulated-0.01-SISO',
+                         'revision' : 'Simulated-1.00-MIMO',
                          'serial' : self.serial,
                          }
         
