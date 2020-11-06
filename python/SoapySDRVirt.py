@@ -11,7 +11,7 @@
 #
 #
 #   #usage: import SoapySDRVirt as SoapySDR
-#   call ChanEm.reset() to clear the buffers.
+#   call ChanEmu().reset() to clear the buffers.
 #
 #	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
 #	INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
@@ -78,8 +78,8 @@ class Channel:
     It implements various impairments including noise, CFO, delay, and DC offset.
     Parameters are static once instantiated.
     '''
-    def __init__(self, noise=-70, phase_shift=True, attn=-40, attn_var=5, delay=48, delay_var=2, dc=.05, iq_imbal=.1, cfo=.00005, delay_spread=5, num_taps=4, tap_attn=12):
-    #def __init__(self, noise=0.0, phase_shift=False, attn=1, attn_var=0, delay=56, delay_var=0, dc=.01, cfo=.000, delay_spread=1, num_taps=1, tap_attn=4):
+    def __init__(self, noise=-70, phase_shift=True, attn=-40, attn_var=5, delay=48, delay_var=5, dc=.1, iq_imbal=.1, cfo=.00005, delay_spread=5, num_taps=4, tap_attn=12):
+    #def __init__(self, noise=None, phase_shift=False, attn=-30, attn_var=0, delay=48, delay_var=0, dc=0, iq_imbal=0, cfo=0, delay_spread=1, num_taps=1, tap_attn=4):
         #cfo in phase rotation per sample in radians
         if num_taps < 1:
             print("There must be at least one tap.")
@@ -117,12 +117,13 @@ class Channel:
         out *= self.genCFO(out.shape[0], self.cfo)  #apply cfo #each device should have a different CFO!
         out += self.dc_tx #apply dc #more physically accurate to do it for each path, but end result is just another constant dc offset
         out.real *= self.iq_imbal_tx #apply iq imbalance -- we just do real, but it can be more or less than 1, so result is fine
-        out += np.random.normal(scale=10**(self.noise/20), size=out.shape[0]) + np.random.normal(scale=10**(self.noise/20), size=out.shape[0])*1.j #add noise
+        if self.noise is not None:
+            out += np.random.normal(scale=10**(self.noise/20), size=out.shape[0]) + np.random.normal(scale=10**(self.noise/20), size=out.shape[0])*1.j #add noise
         return out[:samps.shape[0]]
 
     @staticmethod
     def genCFO(nsamps, cfo):
-        return np.exp(np.array(np.arange(0,nsamps)).transpose()*2j*cfo).astype(np.complex64) #*2j*np.pi
+        return np.exp(np.array(np.arange(0,nsamps)).transpose()*1.j*cfo).astype(np.complex64) #*2j*np.pi #cfo is radians per sample
 
         
         
