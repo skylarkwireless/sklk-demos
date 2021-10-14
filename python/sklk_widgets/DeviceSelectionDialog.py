@@ -179,7 +179,7 @@ class DeviceSelectionDialog(QDialog):
             self._selectButton.setEnabled(False) 
 
     def _handleUpdateTimeout(self):
-        if self._thread is not None and self._thread.isAlive(): return
+        if self._thread is not None and self._thread.is_alive(): return
         self._thread = threading.Thread(target=self._queryDeviceListThread)
         self._thread.start()
 
